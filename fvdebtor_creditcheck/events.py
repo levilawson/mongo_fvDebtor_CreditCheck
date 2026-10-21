@@ -46,6 +46,26 @@ def parse_report_date(value: Any) -> str:
     return value.strip()
 
 
+def _join_and(items: list[str]) -> str:
+    if len(items) <= 2:
+        return " and ".join(items)
+    return ", ".join(items[:-1]) + ", and " + items[-1]
+
+
+def build_rep_groups(clients: list[dict]) -> list[dict]:
+    """One entry per account rep (null rep last) with a ready-to-use client sentence fragment."""
+    groups: dict[str | None, list[dict]] = {}
+    for c in clients:
+        groups.setdefault(c["account_rep"], []).append(
+            {"client_id": c["client_id"], "client_name": c["client_name"]})
+    out = []
+    for rep in sorted(groups, key=lambda r: (r is None, (r or "").lower())):
+        members = groups[rep]
+        text = _join_and([f"{m['client_name'] or 'Unnamed client'} (FV ID: {m['client_id']})" for m in members])
+        out.append({"account_rep": rep, "client_count": len(members), "clients": members, "clients_text": text})
+    return out
+
+
 def parse_client_id(value: Any) -> str | None:
     if isinstance(value, bool) or value is None:
         return None
@@ -125,6 +145,7 @@ class Candidate:
             "restricted": d.get("restricted") if isinstance(d.get("restricted"), bool) else None,
             "mongo_updated_at": _serialize_updated_at(self.doc.get("updatedAt")),
             "clients": clients,
+            "rep_groups": build_rep_groups(clients),
         }
 
 

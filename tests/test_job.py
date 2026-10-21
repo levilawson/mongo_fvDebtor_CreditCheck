@@ -102,7 +102,7 @@ def test_payload_shape_and_string_preservation():
     assert p["event_id"] == make_event_id("1888", "2026-09-16")
     assert set(p) == {"schema_version", "event_type", "event_id", "detected_at", "debtor_id", "debtor_name",
                       "credit_score", "credit_report_date", "credit_average_days", "credit_report_expired",
-                      "restricted", "mongo_updated_at", "clients"}
+                      "restricted", "mongo_updated_at", "clients", "rep_groups"}
 
 
 # ---- dry run / send / dedup / limit ----
@@ -331,3 +331,19 @@ def test_debtor_clients_query_ignores_expired_flag():
 
     out = mongo_source.fetch_debtor_clients("u", ["1892"], Cl)
     assert out == {"1892": {"2565", "1479"}} and "doc.creditReportExpired" not in seen["q"]
+
+
+def test_rep_groups_are_per_rep_with_message_text():
+    from fvdebtor_creditcheck.events import build_rep_groups
+    clients = [
+        {"client_id": "2565", "client_name": "Raine Energy LLC", "account_rep": "AE A"},
+        {"client_id": "1", "client_name": "Client ABC", "account_rep": "AE A"},
+        {"client_id": "2", "client_name": "Client BCD", "account_rep": "AE A"},
+        {"client_id": "3", "client_name": "Client CDE", "account_rep": "AE B"},
+        {"client_id": "4", "client_name": None, "account_rep": None},
+    ]
+    g = build_rep_groups(clients)
+    assert [x["account_rep"] for x in g] == ["AE A", "AE B", None]
+    assert g[0]["clients_text"] == "Raine Energy LLC (FV ID: 2565), Client ABC (FV ID: 1), and Client BCD (FV ID: 2)"
+    assert g[1]["clients_text"] == "Client CDE (FV ID: 3)" and g[1]["client_count"] == 1
+    assert g[2]["clients_text"] == "Unnamed client (FV ID: 4)"
