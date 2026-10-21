@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import webhook
-from .events import collect_candidates, utc_iso
+from .events import collect_candidates, is_commented_out, utc_iso
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -53,6 +53,7 @@ class Summary:
     invalid: int = 0
     clients: int = 0
     clients_unresolved: int = 0
+    clients_excluded: int = 0
     aborted: str | None = None
     dry_run: bool = True
     would_send: list[str] = field(default_factory=list)
@@ -62,7 +63,7 @@ class Summary:
         s = (f"matched={self.matched} duplicate={self.duplicate} already_sent={self.already_sent} "
              f"eligible={self.eligible} selected={self.selected} accepted={self.accepted} "
              f"failed={self.failed} invalid={self.invalid} clients={self.clients} "
-             f"clients_unresolved={self.clients_unresolved} mode={'dry-run' if self.dry_run else 'send'}")
+             f"clients_unresolved={self.clients_unresolved} clients_excluded={self.clients_excluded} mode={'dry-run' if self.dry_run else 'send'}")
         return s + (f" ABORTED={self.aborted}" if self.aborted else "")
 
 
@@ -112,6 +113,11 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
 
     all_ids = {c for cand, _ in selected for c in cand.client_ids}
     companies = company_lookup(all_ids) if company_lookup and all_ids else {}
+    excluded = {c for c in all_ids if is_commented_out((companies.get(c) or {}).get("name"))}
+    for cand, _ in selected:
+        cand.client_ids -= excluded
+    all_ids -= excluded
+    summary.clients_excluded = len(excluded)
     summary.clients = len(all_ids)
     summary.clients_unresolved = sum(1 for c in all_ids if not (companies.get(c) or {}).get("name"))
     if company_lookup and summary.clients_unresolved:

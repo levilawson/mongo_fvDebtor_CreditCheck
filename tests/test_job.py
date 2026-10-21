@@ -352,3 +352,16 @@ def test_rep_groups_are_per_rep_with_message_text():
     assert g[0]["clients_text"] == "Raine Energy LLC (FV ID: 2565), Client ABC (FV ID: 1), and Client BCD (FV ID: 2)"
     assert g[1]["clients_text"] == "Client CDE (FV ID: 3)" and g[1]["client_count"] == 1
     assert g[2]["clients_text"] == "Unnamed client (FV ID: 4)"
+
+
+def test_z_prefixed_clients_excluded(store):
+    sess = FakeSession(Resp(200))
+    companies = {"1": {"name": "Good Co", "accountRep": "AE A"},
+                 "2": {"name": "Z - Old Co", "accountRep": None},
+                 "3": {"name": " z-Old Co 2", "accountRep": None},
+                 "4": {"name": "Zephyr Energy", "accountRep": "AE B"}}
+    s = runner.run_job([doc("9", client="1")], store, client(sess), True, None,
+                       company_lookup=lambda ids: companies,
+                       debtor_clients_lookup=lambda ids: {"9": {"1", "2", "3", "4"}})
+    assert s.clients_excluded == 2 and s.clients == 2
+    assert [c["client_id"] for c in sess.calls[0][1]["json"]["clients"]] == ["1", "4"]

@@ -46,6 +46,14 @@ def parse_report_date(value: Any) -> str:
     return value.strip()
 
 
+_COMMENTED_OUT_RE = re.compile(r"^\s*z\s*-", re.IGNORECASE)
+
+
+def is_commented_out(name: Any) -> bool:
+    """FactorView convention: companies prefixed 'Z -' are commented out (inactive)."""
+    return isinstance(name, str) and bool(_COMMENTED_OUT_RE.match(name))
+
+
 def _join_and(items: list[str]) -> str:
     if len(items) <= 2:
         return " and ".join(items)
