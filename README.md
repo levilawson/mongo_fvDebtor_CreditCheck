@@ -31,7 +31,7 @@ All are git-ignored. Logs never contain the Mongo URI, webhook URL, or raw Mongo
 
 ## Commands
 ```powershell
-& $PY = ".\\.venv\\Scripts\\python.exe"
+$PY = ".\\.venv\\Scripts\\python.exe"
 & $PY -m pytest -q                                   # tests (mocked Mongo/webhook)
 & $PY -m fvdebtor_creditcheck run --limit 1          # DRY-RUN (default): reads Mongo, sends/writes nothing
 & $PY -m fvdebtor_creditcheck run --send --limit 1   # send exactly one unsent event
