@@ -102,7 +102,7 @@ def test_payload_shape_and_string_preservation():
     assert p["event_id"] == make_event_id("1888", "2026-09-16")
     assert set(p) == {"schema_version", "event_type", "event_id", "detected_at", "debtor_id", "debtor_name",
                       "credit_score", "credit_report_date", "credit_average_days", "credit_report_expired",
-                      "restricted", "mongo_updated_at", "clients", "rep_groups"}
+                      "restricted", "mongo_updated_at", "client_count", "clients", "rep_groups"}
 
 
 # ---- dry run / send / dedup / limit ----
@@ -365,3 +365,11 @@ def test_z_prefixed_clients_excluded(store):
                        debtor_clients_lookup=lambda ids: {"9": {"1", "2", "3", "4"}})
     assert s.clients_excluded == 2 and s.clients == 2
     assert [c["client_id"] for c in sess.calls[0][1]["json"]["clients"]] == ["1", "4"]
+
+
+def test_event_with_no_clients_is_still_sent_with_zero_count(store):
+    sess = FakeSession(Resp(200))
+    companies = {"2": {"name": "Z - Old Co", "accountRep": None}}
+    runner.run_job([doc("9", client="2")], store, client(sess), True, None, company_lookup=lambda ids: companies)
+    p = sess.calls[0][1]["json"]
+    assert p["client_count"] == 0 and p["clients"] == [] and p["rep_groups"] == []

@@ -152,6 +152,7 @@ class Candidate:
             "credit_report_expired": True,
             "restricted": d.get("restricted") if isinstance(d.get("restricted"), bool) else None,
             "mongo_updated_at": _serialize_updated_at(self.doc.get("updatedAt")),
+            "client_count": len(clients),
             "clients": clients,
             "rep_groups": build_rep_groups(clients),
         }

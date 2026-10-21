@@ -10,7 +10,8 @@ regardless of each record's expired flag), resolved against `fvCompany` by `doc.
 `{"client_id", "client_name", "account_rep"}`. `rep_groups` regroups the same clients per account rep (null rep last) with a ready-made `clients_text`
 ("Name (FV ID: 1), Name (FV ID: 2), and Name (FV ID: 3)") so the Zap can loop over reps and send one message each.
 Clients whose `fvCompany` name starts with `Z -` (FactorView's commented-out convention) are excluded
-(`clients_excluded` in the summary). Unresolved clients are sent with null name/rep and counted in
+(`clients_excluded` in the summary). `client_count` is the number of clients after exclusions. An event with `client_count: 0` is still sent
+(the Zap routes it to the AE manager). Debtors are never filtered by name. Unresolved clients are sent with null name/rep and counted in
 `clients_unresolved`. Rep data is refreshed on every run until the event is accepted; after acceptance the event is
 never resent, so later rep or client changes are not re-announced.
 
