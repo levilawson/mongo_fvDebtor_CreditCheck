@@ -82,7 +82,7 @@ def _deliver(store: Store, client, row, summary: Summary) -> webhook.Result:
 
 def run_job(docs, store: Store, client, send: bool, limit: int | None,
             max_consecutive_failed: int = 3, debtor_id: str | None = None,
-            company_lookup=None) -> Summary:
+            company_lookup=None, debtor_clients_lookup=None) -> Summary:
     summary = Summary(dry_run=not send)
     collected = collect_candidates(docs)
     summary.matched, summary.duplicate = collected.matched, collected.duplicate
@@ -103,6 +103,11 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
     summary.eligible = len(eligible)
     selected = eligible if limit is None else eligible[:max(limit, 0)]
     summary.selected = len(selected)
+
+    if debtor_clients_lookup and selected:
+        linked = debtor_clients_lookup({cand.debtor_id for cand, _ in selected})
+        for cand, _ in selected:
+            cand.client_ids |= linked.get(cand.debtor_id, set())
 
     all_ids = {c for cand, _ in selected for c in cand.client_ids}
     companies = company_lookup(all_ids) if company_lookup and all_ids else {}

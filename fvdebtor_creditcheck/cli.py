@@ -58,11 +58,12 @@ def cmd_run(cfg: Config, args) -> int:
         cfg.require_webhook()
     docs = fetch_expired(cfg.require_mongo())
     lookup = lambda ids: fetch_companies(cfg.require_mongo(), ids)  # noqa: E731
+    linked = lambda ids: fetch_debtor_clients(cfg.require_mongo(), ids)  # noqa: E731
     if not args.send:
         store = Store(cfg.state_db_path, readonly=True)  # dry-run never writes
         try:
             summary = run_job(docs, store, None, False, args.limit, debtor_id=args.debtor_id,
-                              company_lookup=lookup)
+                              company_lookup=lookup, debtor_clients_lookup=linked)
         finally:
             store.close()
         print(f"[dry-run] would send debtor_ids: {summary.would_send}")
@@ -72,7 +73,7 @@ def cmd_run(cfg: Config, args) -> int:
             try:
                 summary = run_job(docs, store, build_client(cfg), True, args.limit,
                                   cfg.max_consecutive_failed_events, debtor_id=args.debtor_id,
-                                  company_lookup=lookup)
+                                  company_lookup=lookup, debtor_clients_lookup=linked)
             finally:
                 store.close()
     log.info("run summary: %s", summary.line())

@@ -54,6 +54,31 @@ def fetch_companies(uri: str, ids, client_factory=MongoClient) -> dict[str, dict
             client.close()
 
 
+def fetch_debtor_clients(uri: str, debtor_ids, client_factory=MongoClient) -> dict[str, set]:
+    """Every clientId linked to each debtor, regardless of the expired flag. Read-only."""
+    ids = sorted({str(i) for i in debtor_ids})
+    out: dict[str, set] = {}
+    if not ids:
+        return out
+    client = None
+    try:
+        client = _open(uri, client_factory)
+        coll = client[MONGO_DB][MONGO_COLLECTION]
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            chunk = chunk + [int(x) for x in chunk if x.isdigit()]
+            for d in coll.find({"doc.id": {"$in": chunk}}, {"_id": 0, "doc.id": 1, "clientId": 1}):
+                cid = d.get("clientId")
+                if cid is not None:
+                    out.setdefault(str((d.get("doc") or {}).get("id")), set()).add(str(cid))
+        return out
+    except Exception as exc:  # noqa: BLE001
+        raise MongoReadError(type(exc).__name__) from None
+    finally:
+        if client is not None:
+            client.close()
+
+
 def fetch_expired(uri: str, client_factory=MongoClient) -> list[dict]:
     client = None
     try:

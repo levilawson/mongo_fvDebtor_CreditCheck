@@ -298,7 +298,36 @@ def test_cli_dry_run_end_to_end(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setattr(cli, "fetch_expired", lambda uri: [doc("1892", client="2565"), doc("5")])
     monkeypatch.setattr(cli, "fetch_companies", lambda uri, ids: COMPANIES)
+    monkeypatch.setattr(cli, "fetch_debtor_clients", lambda uri, ids: {"1892": {"2565", "1479"}})
     assert cli.main(["run", "--debtor-id", "1892"]) == 0
     out = capsys.readouterr().out
-    assert "['1892']" in out and "clients=1" in out and "mode=dry-run" in out
+    assert "['1892']" in out and "clients=2" in out and "mode=dry-run" in out
     assert not (tmp_path / "s.sqlite3").exists()
+
+
+def test_all_linked_clients_included_even_if_their_record_not_expired(store):
+    sess = FakeSession(Resp(200))
+    runner.run_job([doc("1892", client="2565")], store, client(sess), True, None,
+                   company_lookup=lambda ids: COMPANIES,
+                   debtor_clients_lookup=lambda ids: {"1892": {"2565", "1479"}})
+    assert [c["client_id"] for c in sess.calls[0][1]["json"]["clients"]] == ["1479", "2565"]
+
+
+def test_debtor_clients_query_ignores_expired_flag():
+    seen = {}
+
+    class Coll:
+        def find(self, q, p):
+            seen["q"] = q
+            return [{"doc": {"id": "1892"}, "clientId": "2565"}, {"doc": {"id": 1892}, "clientId": "1479"}]
+
+    class Db:
+        def __getitem__(self, n): return Coll()
+
+    class Cl:
+        def __init__(self, uri, **kw): pass
+        def __getitem__(self, n): return Db()
+        def close(self): pass
+
+    out = mongo_source.fetch_debtor_clients("u", ["1892"], Cl)
+    assert out == {"1892": {"2565", "1479"}} and "doc.creditReportExpired" not in seen["q"]

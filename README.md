@@ -5,8 +5,8 @@ Reads expired debtor credit reports from MongoDB (`payments-service.fvDebtor`, q
 It never calls FactorView. Zapier later does the CreditSafe lookup, FactorView update and AE notification.
 
 ## Payload: clients and account reps
-Each debtor event includes `clients`: every `clientId` found on the debtor's `fvDebtor` documents (all documents
-sharing the debtor ID and report date are merged), resolved against `fvCompany` by `doc.id`:
+Each debtor event includes `clients`: every `clientId` linked to the debtor in `fvDebtor` (looked up by debtor ID,
+regardless of each record's expired flag), resolved against `fvCompany` by `doc.id`:
 `{"client_id", "client_name", "account_rep"}`. Unresolved clients are sent with null name/rep and counted in
 `clients_unresolved`. Rep data is refreshed on every run until the event is accepted; after acceptance the event is
 never resent, so later rep or client changes are not re-announced.
