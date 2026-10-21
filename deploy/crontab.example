@@ -1,0 +1,3 @@
+# Alternative to systemd. PLACEHOLDER schedule: weekdays 07:00 Central. Do not install until approved.
+CRON_TZ=America/Chicago
+0 7 * * 1-5 cd /home/user/mongo_fvDebtor_CreditCheck && .venv/bin/python -m fvdebtor_creditcheck run --send >> logs/cron.out 2>&1
