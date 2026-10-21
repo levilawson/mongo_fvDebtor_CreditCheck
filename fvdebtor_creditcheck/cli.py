@@ -8,7 +8,7 @@ import sys
 
 from .config import Config, ConfigError, load_config
 from .events import utc_iso
-from .mongo_source import MongoReadError, fetch_expired
+from .mongo_source import MongoReadError, fetch_companies, fetch_expired
 from .runner import AlreadyRunning, replay_event, run_job, single_instance
 from .store import Store
 from .webhook import WebhookClient

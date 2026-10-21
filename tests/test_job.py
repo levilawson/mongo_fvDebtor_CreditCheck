@@ -287,3 +287,18 @@ def test_company_lookup_queries_fvcompany_in_one_batch():
     out = mongo_source.fetch_companies("u", ["2565", 2565, "1"], Cl)
     assert seen["coll"] == "fvCompany" and seen["q"] == {"doc.id": {"$in": ["1", "2565"]}}
     assert out["2565"]["accountRep"] == "Christine Dunn"
+
+
+def test_cli_dry_run_end_to_end(tmp_path, monkeypatch, capsys):
+    from fvdebtor_creditcheck import cli
+    monkeypatch.setenv("MONGO_URI", "mongodb://u:pw@h")
+    monkeypatch.setenv("ZAPIER_WEBHOOK_URL", "https://hooks.example/x")
+    monkeypatch.setenv("STATE_DB_PATH", str(tmp_path / "s.sqlite3"))
+    monkeypatch.setenv("LOCK_PATH", str(tmp_path / "l.lock"))
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setattr(cli, "fetch_expired", lambda uri: [doc("1892", client="2565"), doc("5")])
+    monkeypatch.setattr(cli, "fetch_companies", lambda uri, ids: COMPANIES)
+    assert cli.main(["run", "--debtor-id", "1892"]) == 0
+    out = capsys.readouterr().out
+    assert "['1892']" in out and "clients=1" in out and "mode=dry-run" in out
+    assert not (tmp_path / "s.sqlite3").exists()
