@@ -16,26 +16,29 @@ It never calls FactorView. Zapier later does the CreditSafe lookup, FactorView u
 * Accepted events are never resent by scheduled runs. Failed events are kept in SQLite and retried on later runs
   while Mongo still reports them expired.
 
-## Setup (this VM, Linux)
-```bash
-cd /home/user/mongo_fvDebtor_CreditCheck
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt        # add requirements-dev.txt for tests
-cp .env.example .env && chmod 600 .env           # then edit MONGO_URI and ZAPIER_WEBHOOK_URL
+## Setup (Windows PC, PowerShell)
+```powershell
+cd C:\Users\paymentsuser
+git clone -b claude/focused-brown-cyc8rx https://github.com/levilawson/mongo_fvDebtor_CreditCheck.git
+cd mongo_fvDebtor_CreditCheck
+python -m venv .venv
+.\.venv\Scripts\pip install -r requirements.txt     # add requirements-dev.txt for tests
+copy .env.example .env                                 # then edit .env with MONGO_URI and ZAPIER_WEBHOOK_URL
 ```
-State: `state/deliveries.sqlite3` (UTC timestamps), lock `state/job.lock`, logs `logs/job.log` (rotating).
+State: `state\deliveries.sqlite3` (UTC timestamps), lock `state\job.lock`, logs `logs\job.log` (rotating).
 All are git-ignored. Logs never contain the Mongo URI, webhook URL, or raw Mongo documents.
+(On Linux use `.venv/bin/python` instead of `.venv\Scripts\python.exe`.)
 
 ## Commands
-```bash
-PY=.venv/bin/python
-$PY -m pytest -q                                   # tests (mocked Mongo/webhook)
-$PY -m fvdebtor_creditcheck run --limit 1          # DRY-RUN (default): reads Mongo, sends/writes nothing
-$PY -m fvdebtor_creditcheck run --send --limit 1   # send exactly one unsent event
-$PY -m fvdebtor_creditcheck run --send             # send all eligible unsent events
-$PY -m fvdebtor_creditcheck status [--status failed|pending|accepted] [--limit N]
-$PY -m fvdebtor_creditcheck replay <event_id>          # shows what would be replayed
-$PY -m fvdebtor_creditcheck replay <event_id> --send   # resend same payload and event_id
+```powershell
+& $PY = ".\\.venv\\Scripts\\python.exe"
+& $PY -m pytest -q                                   # tests (mocked Mongo/webhook)
+& $PY -m fvdebtor_creditcheck run --limit 1          # DRY-RUN (default): reads Mongo, sends/writes nothing
+& $PY -m fvdebtor_creditcheck run --send --limit 1   # send exactly one unsent event
+& $PY -m fvdebtor_creditcheck run --send             # send all eligible unsent events
+& $PY -m fvdebtor_creditcheck status [--status failed|pending|accepted] [--limit N]
+& $PY -m fvdebtor_creditcheck replay <event_id>          # shows what would be replayed
+& $PY -m fvdebtor_creditcheck replay <event_id> --send   # resend same payload and event_id
 ```
 `--limit` applies after removing already-accepted events, so sent rows cannot starve the backlog.
 Run summary: `matched, duplicate, already_sent, eligible, selected, accepted, failed, invalid`.
@@ -50,12 +53,10 @@ Exit codes: 0 ok, 1 failures/abort, 2 config/usage, 3 Mongo error, 4 another run
 * Overlapping `--send`/replay runs are prevented by a file lock (dry-runs don't lock or write).
 
 ## Scheduling (NOT enabled; schedule time is a placeholder - confirm first)
-Linux/systemd (intended zone America/Chicago; units in `deploy/`):
-```bash
-sudo cp deploy/fvdebtor-creditcheck.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now fvdebtor-creditcheck.timer    # only after sign-off
-systemctl list-timers fvdebtor-creditcheck.timer
+`deploy\windows_task.ps1` registers a Task Scheduler task named `FvDebtorCreditCheck` **disabled**
+(weekdays 07:00, overlapping starts ignored). Task Scheduler uses the PC clock, so set the PC to Central Time
+for America/Chicago. Run from an elevated or normal PowerShell:
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\windows_task.ps1
+Enable-ScheduledTask -TaskName FvDebtorCreditCheck      # only after dry-run, one-event send and Zap sign-off
 ```
-Cron alternative: `deploy/crontab.example` (uses `CRON_TZ=America/Chicago`). The VM had no existing
-scheduled-job convention for this project (empty repo, only system cron jobs), so these are new.

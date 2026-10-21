@@ -1,8 +1,8 @@
 """Orchestration: Mongo -> dedupe -> SQLite -> webhook."""
 from __future__ import annotations
 
-import fcntl
 import json
+import sys
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -25,7 +25,15 @@ def single_instance(lock_path: Path):
     fh = open(lock_path, "w")
     try:
         try:
-            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if sys.platform == "win32":
+                import msvcrt
+                fh.write(" ")
+                fh.flush()
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             raise AlreadyRunning("another run holds the lock") from None
         yield

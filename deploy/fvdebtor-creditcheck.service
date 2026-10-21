@@ -1,9 +1,0 @@
-[Unit]
-Description=FactorView expired credit reports -> Zapier webhook
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-WorkingDirectory=/home/user/mongo_fvDebtor_CreditCheck
-ExecStart=/home/user/mongo_fvDebtor_CreditCheck/.venv/bin/python -m fvdebtor_creditcheck run --send
