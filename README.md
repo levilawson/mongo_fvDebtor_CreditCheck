@@ -4,6 +4,13 @@ Reads expired debtor credit reports from MongoDB (`payments-service.fvDebtor`, q
 `{"doc.creditReportExpired": true}`, read-only) and POSTs **one event per debtor** to a Zapier Catch Hook.
 It never calls FactorView. Zapier later does the CreditSafe lookup, FactorView update and AE notification.
 
+## Payload: clients and account reps
+Each debtor event includes `clients`: every `clientId` found on the debtor's `fvDebtor` documents (all documents
+sharing the debtor ID and report date are merged), resolved against `fvCompany` by `doc.id`:
+`{"client_id", "client_name", "account_rep"}`. Unresolved clients are sent with null name/rep and counted in
+`clients_unresolved`. Rep data is refreshed on every run until the event is accepted; after acceptance the event is
+never resent, so later rep or client changes are not re-announced.
+
 ## Delivery semantics (read this)
 * **At least once, not exactly once.** "Accepted" means Zapier returned 2xx (handed to Zapier), not that a
   credit refresh happened. An HTTP timeout can occur *after* Zapier accepted the event; the event is then

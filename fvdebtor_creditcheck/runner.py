@@ -51,6 +51,8 @@ class Summary:
     accepted: int = 0
     failed: int = 0
     invalid: int = 0
+    clients: int = 0
+    clients_unresolved: int = 0
     aborted: str | None = None
     dry_run: bool = True
     would_send: list[str] = field(default_factory=list)
@@ -58,7 +60,8 @@ class Summary:
     def line(self) -> str:
         s = (f"matched={self.matched} duplicate={self.duplicate} already_sent={self.already_sent} "
              f"eligible={self.eligible} selected={self.selected} accepted={self.accepted} "
-             f"failed={self.failed} invalid={self.invalid} mode={'dry-run' if self.dry_run else 'send'}")
+             f"failed={self.failed} invalid={self.invalid} clients={self.clients} "
+             f"clients_unresolved={self.clients_unresolved} mode={'dry-run' if self.dry_run else 'send'}")
         return s + (f" ABORTED={self.aborted}" if self.aborted else "")
 
 
@@ -78,7 +81,8 @@ def _deliver(store: Store, client, row, summary: Summary) -> webhook.Result:
 
 
 def run_job(docs, store: Store, client, send: bool, limit: int | None,
-            max_consecutive_failed: int = 3, debtor_id: str | None = None) -> Summary:
+            max_consecutive_failed: int = 3, debtor_id: str | None = None,
+            company_lookup=None) -> Summary:
     summary = Summary(dry_run=not send)
     collected = collect_candidates(docs)
     summary.matched, summary.duplicate = collected.matched, collected.duplicate
@@ -100,6 +104,13 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
     selected = eligible if limit is None else eligible[:max(limit, 0)]
     summary.selected = len(selected)
 
+    all_ids = {c for cand, _ in selected for c in cand.client_ids}
+    companies = company_lookup(all_ids) if company_lookup and all_ids else {}
+    summary.clients = len(all_ids)
+    summary.clients_unresolved = sum(1 for c in all_ids if not (companies.get(c) or {}).get("name"))
+    if company_lookup and summary.clients_unresolved:
+        log.warning("%d client id(s) not found in fvCompany; sent with null name/rep", summary.clients_unresolved)
+
     if not send:
         summary.would_send = [c.debtor_id for c, _ in selected]
         return summary
@@ -107,7 +118,8 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
     detected_at = utc_iso()
     consecutive = 0
     for cand, row in selected:
-        row = row or store.ensure(cand.event_key, cand.build_payload(detected_at))
+        payload = cand.build_payload(detected_at, companies)
+        row = store.refresh_payload(cand.event_key, payload) if row else store.ensure(cand.event_key, payload)
         res = _deliver(store, client, row, summary)
         if res.outcome == webhook.CONFIG_ERROR:
             summary.aborted = f"destination configuration error (HTTP {res.http_status})"

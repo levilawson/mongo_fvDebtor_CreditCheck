@@ -63,6 +63,18 @@ class Store:
         self.conn.commit()
         return self.get(event_key)
 
+    def refresh_payload(self, event_key: str, payload: dict):
+        """Update an unaccepted event's payload (e.g. new client/rep data); event_id and detected_at are kept."""
+        row = self.get(event_key)
+        if row is None or row["status"] == "accepted":
+            return row
+        old = json.loads(row["payload_json"])
+        payload = dict(payload, event_id=old["event_id"], detected_at=old["detected_at"])
+        self.conn.execute("UPDATE events SET payload_json=? WHERE event_key=?",
+                          (json.dumps(payload, sort_keys=True), event_key))
+        self.conn.commit()
+        return self.get(event_key)
+
     def record_attempt(self, event_key: str, accepted: bool, http_status: int | None,
                        error: str | None, attempts: int):
         now = utc_iso()

@@ -9,8 +9,8 @@ from fvdebtor_creditcheck.events import collect_candidates, make_event_id
 from fvdebtor_creditcheck.store import Store
 
 
-def doc(i="1888", date="2026-09-16", upd="2026-10-01T00:00:00Z", score="70/B"):
-    return {"doc": {"id": i, "name": f"Debtor {i}", "restricted": False,
+def doc(i="1888", date="2026-09-16", upd="2026-10-01T00:00:00Z", score="70/B", client="2565"):
+    return {"clientId": client, "doc": {"id": i, "name": f"Debtor {i}", "restricted": False,
                     "creditRating": {"score": score, "date": date, "averageDays": 0},
                     "creditReportExpired": True}, "updatedAt": upd}
 
@@ -102,7 +102,7 @@ def test_payload_shape_and_string_preservation():
     assert p["event_id"] == make_event_id("1888", "2026-09-16")
     assert set(p) == {"schema_version", "event_type", "event_id", "detected_at", "debtor_id", "debtor_name",
                       "credit_score", "credit_report_date", "credit_average_days", "credit_report_expired",
-                      "restricted", "mongo_updated_at"}
+                      "restricted", "mongo_updated_at", "clients"}
 
 
 # ---- dry run / send / dedup / limit ----
@@ -237,3 +237,53 @@ def test_debtor_id_filter_sends_only_that_debtor(store):
     s = runner.run_job([doc("1"), doc("2303"), doc("3")], store, client(sess), True, None, debtor_id="2303")
     assert s.eligible == 1 and s.accepted == 1
     assert [c[1]["json"]["debtor_id"] for c in sess.calls] == ["2303"]
+
+
+COMPANIES = {"2565": {"name": "Raine Energy Services LLC", "accountRep": "Christine Dunn"},
+             "1479": {"name": "Other Client", "accountRep": None}}
+
+
+def test_clients_unioned_across_duplicates_and_enriched(store):
+    sess = FakeSession(Resp(200))
+    docs = [doc("1892", client="2565", upd="2026-10-01T00:00:00Z"),
+            doc("1892", client="1479", upd="2026-10-05T00:00:00Z"),
+            doc("1892", client="9999")]
+    s = runner.run_job(docs, store, client(sess), True, None, company_lookup=lambda ids: COMPANIES)
+    assert s.duplicate == 2 and s.clients == 3 and s.clients_unresolved == 1 and len(sess.calls) == 1
+    assert sess.calls[0][1]["json"]["clients"] == [
+        {"client_id": "1479", "client_name": "Other Client", "account_rep": None},
+        {"client_id": "2565", "client_name": "Raine Energy Services LLC", "account_rep": "Christine Dunn"},
+        {"client_id": "9999", "client_name": None, "account_rep": None}]
+
+
+def test_failed_event_payload_refreshed_but_event_id_and_detected_at_kept(store):
+    runner.run_job([doc("1")], store, client(FakeSession(Resp(400))), True, None)
+    first = json.loads(store.get("1|2026-09-16")["payload_json"])
+    sess = FakeSession(Resp(200))
+    runner.run_job([doc("1")], store, client(sess), True, None, company_lookup=lambda ids: COMPANIES)
+    sent = sess.calls[0][1]["json"]
+    assert sent["event_id"] == first["event_id"] and sent["detected_at"] == first["detected_at"]
+    assert sent["clients"][0]["account_rep"] == "Christine Dunn"
+
+
+def test_company_lookup_queries_fvcompany_in_one_batch():
+    seen = {}
+
+    class Coll:
+        def find(self, q, p):
+            seen["q"] = q
+            return [{"doc": {"id": "2565", "name": "Raine", "accountRep": "Christine Dunn"}}]
+
+    class Db:
+        def __getitem__(self, n):
+            seen["coll"] = n
+            return Coll()
+
+    class Cl:
+        def __init__(self, uri, **kw): pass
+        def __getitem__(self, n): return Db()
+        def close(self): pass
+
+    out = mongo_source.fetch_companies("u", ["2565", 2565, "1"], Cl)
+    assert seen["coll"] == "fvCompany" and seen["q"] == {"doc.id": {"$in": ["1", "2565"]}}
+    assert out["2565"]["accountRep"] == "Christine Dunn"

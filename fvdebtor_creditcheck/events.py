@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any, Iterable
 
@@ -44,6 +44,16 @@ def parse_report_date(value: Any) -> str:
     except ValueError:
         raise InvalidRecord("invalid credit report date") from None
     return value.strip()
+
+
+def parse_client_id(value: Any) -> str | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        value = str(value)
+    if isinstance(value, str) and _ID_RE.match(value.strip()):
+        return value.strip()
+    return None
 
 
 def make_event_key(debtor_id: str, report_date: str) -> str:
@@ -87,8 +97,15 @@ class Candidate:
     report_date: str
     doc: dict
     updated_sort: tuple[int, float]
+    client_ids: set = field(default_factory=set)
 
-    def build_payload(self, detected_at: str) -> dict:
+    def build_payload(self, detected_at: str, companies: dict | None = None) -> dict:
+        companies = companies or {}
+        clients = []
+        for cid in sorted(self.client_ids):
+            co = companies.get(cid) or {}
+            clients.append({"client_id": cid, "client_name": co.get("name"),
+                            "account_rep": co.get("accountRep")})
         d = self.doc.get("doc") or {}
         cr = d.get("creditRating") or {}
         score = cr.get("score")
@@ -107,6 +124,7 @@ class Candidate:
             "credit_report_expired": True,
             "restricted": d.get("restricted") if isinstance(d.get("restricted"), bool) else None,
             "mongo_updated_at": _serialize_updated_at(self.doc.get("updatedAt")),
+            "clients": clients,
         }
 
 
@@ -136,12 +154,18 @@ def collect_candidates(docs: Iterable[dict]) -> Collected:
             continue
         cand = Candidate(make_event_key(debtor_id, report_date), debtor_id, report_date,
                          raw, _updated_sort_key(raw.get("updatedAt")))
+        client_id = parse_client_id(raw.get("clientId"))
         existing = best.get(cand.event_key)
         if existing is None:
             best[cand.event_key] = cand
         else:
             duplicate += 1
+            cand.client_ids |= existing.client_ids
             if cand.updated_sort > existing.updated_sort:
                 best[cand.event_key] = cand
+            else:
+                cand = existing
+        if client_id:
+            cand.client_ids.add(client_id)
     ordered = sorted(best.values(), key=lambda c: (c.debtor_id, c.report_date))
     return Collected(ordered, matched, duplicate, invalid)
