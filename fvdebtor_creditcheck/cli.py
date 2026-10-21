@@ -40,6 +40,7 @@ def parser() -> argparse.ArgumentParser:
     r = sub.add_parser("run", help="find expired reports and (with --send) post them to Zapier")
     r.add_argument("--send", action="store_true", help="actually POST to the webhook (default: dry-run)")
     r.add_argument("--limit", type=int, help="max eligible, unsent events to process")
+    r.add_argument("--debtor-id", help="only process this debtor ID (e.g. for a single test)")
     s = sub.add_parser("status", help="show delivery status")
     s.add_argument("--status", choices=["pending", "failed", "accepted"])
     s.add_argument("--limit", type=int, default=50)
@@ -59,7 +60,7 @@ def cmd_run(cfg: Config, args) -> int:
     if not args.send:
         store = Store(cfg.state_db_path, readonly=True)  # dry-run never writes
         try:
-            summary = run_job(docs, store, None, False, args.limit)
+            summary = run_job(docs, store, None, False, args.limit, debtor_id=args.debtor_id)
         finally:
             store.close()
         print(f"[dry-run] would send debtor_ids: {summary.would_send}")
@@ -68,7 +69,7 @@ def cmd_run(cfg: Config, args) -> int:
             store = Store(cfg.state_db_path)
             try:
                 summary = run_job(docs, store, build_client(cfg), True, args.limit,
-                                  cfg.max_consecutive_failed_events)
+                                  cfg.max_consecutive_failed_events, debtor_id=args.debtor_id)
             finally:
                 store.close()
     log.info("run summary: %s", summary.line())

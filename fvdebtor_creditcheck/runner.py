@@ -78,7 +78,7 @@ def _deliver(store: Store, client, row, summary: Summary) -> webhook.Result:
 
 
 def run_job(docs, store: Store, client, send: bool, limit: int | None,
-            max_consecutive_failed: int = 3) -> Summary:
+            max_consecutive_failed: int = 3, debtor_id: str | None = None) -> Summary:
     summary = Summary(dry_run=not send)
     collected = collect_candidates(docs)
     summary.matched, summary.duplicate = collected.matched, collected.duplicate
@@ -89,6 +89,8 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
     # Filter out accepted events BEFORE applying the limit so they cannot starve the backlog.
     eligible = []
     for cand in collected.candidates:
+        if debtor_id is not None and cand.debtor_id != debtor_id:
+            continue
         row = store.get(cand.event_key)
         if row is not None and row["status"] == "accepted":
             summary.already_sent += 1

@@ -230,3 +230,10 @@ def test_overlapping_runs_blocked(tmp_path):
                 pass
     with runner.single_instance(lock):
         pass
+
+
+def test_debtor_id_filter_sends_only_that_debtor(store):
+    sess = FakeSession(Resp(200))
+    s = runner.run_job([doc("1"), doc("2303"), doc("3")], store, client(sess), True, None, debtor_id="2303")
+    assert s.eligible == 1 and s.accepted == 1
+    assert [c[1]["json"]["debtor_id"] for c in sess.calls] == ["2303"]
