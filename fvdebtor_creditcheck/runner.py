@@ -56,6 +56,7 @@ class Summary:
     aborted: str | None = None
     dry_run: bool = True
     would_send: list[str] = field(default_factory=list)
+    previews: list[dict] = field(default_factory=list)
 
     def line(self) -> str:
         s = (f"matched={self.matched} duplicate={self.duplicate} already_sent={self.already_sent} "
@@ -118,6 +119,7 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
 
     if not send:
         summary.would_send = [c.debtor_id for c, _ in selected]
+        summary.previews = [c.build_payload(utc_iso(), companies) for c, _ in selected]
         return summary
 
     detected_at = utc_iso()

@@ -303,6 +303,11 @@ def test_cli_dry_run_end_to_end(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "['1892']" in out and "clients=2" in out and "mode=dry-run" in out
     assert not (tmp_path / "s.sqlite3").exists()
+    assert cli.main(["run", "--debtor-id", "1892", "--show-payload"]) == 0
+    out = capsys.readouterr().out
+    assert '"rep_groups"' in out and '"account_rep": "Christine Dunn"' in out and "hooks.example" not in out
+    assert cli.main(["run", "--debtor-id", "1892-show-payload"]) == 0
+    assert "no eligible event" in capsys.readouterr().out
 
 
 def test_all_linked_clients_included_even_if_their_record_not_expired(store):

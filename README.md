@@ -43,6 +43,7 @@ All are git-ignored. Logs never contain the Mongo URI, webhook URL, or raw Mongo
 $PY = ".\.venv\Scripts\python.exe"
 & $PY -m pytest -q                                   # tests (mocked Mongo/webhook)
 & $PY -m fvdebtor_creditcheck run --limit 1          # DRY-RUN (default): reads Mongo, sends/writes nothing
+& $PY -m fvdebtor_creditcheck run --debtor-id 2303 --send   # send one specific debtor (dry-run without --send) $PY -m fvdebtor_creditcheck run --debtor-id 1892 --show-payload   # dry-run that prints the JSON payload
 & $PY -m fvdebtor_creditcheck run --debtor-id 2303 --send   # send one specific debtor (dry-run without --send)
 & $PY -m fvdebtor_creditcheck run --send --limit 1   # send exactly one unsent event
 & $PY -m fvdebtor_creditcheck run --send             # send all eligible unsent events

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import logging.handlers
 import sys
@@ -40,6 +41,8 @@ def parser() -> argparse.ArgumentParser:
     r = sub.add_parser("run", help="find expired reports and (with --send) post them to Zapier")
     r.add_argument("--send", action="store_true", help="actually POST to the webhook (default: dry-run)")
     r.add_argument("--limit", type=int, help="max eligible, unsent events to process")
+    r.add_argument("--show-payload", action="store_true",
+                   help="dry-run only: print the JSON payload(s) that would be sent")
     r.add_argument("--debtor-id", help="only process this debtor ID (e.g. for a single test)")
     s = sub.add_parser("status", help="show delivery status")
     s.add_argument("--status", choices=["pending", "failed", "accepted"])
@@ -67,6 +70,12 @@ def cmd_run(cfg: Config, args) -> int:
         finally:
             store.close()
         print(f"[dry-run] would send debtor_ids: {summary.would_send}")
+        if args.show_payload:
+            for payload in summary.previews:
+                print(json.dumps(payload, indent=2))
+        if args.debtor_id and not summary.would_send:
+            print(f"note: no eligible event for debtor id {args.debtor_id!r} "
+                  "(not expired, already sent, or the ID was mistyped)")
     else:
         with single_instance(cfg.lock_path):
             store = Store(cfg.state_db_path)
