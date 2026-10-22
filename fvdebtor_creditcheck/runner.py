@@ -25,13 +25,11 @@ class AlreadyRunning(Exception):
 @contextmanager
 def single_instance(lock_path: Path):
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    fh = open(lock_path, "w")
+    fh = open(lock_path, "ab")  # never write to it: on Windows a buffered write into a locked byte fails on close
     try:
         try:
             if sys.platform == "win32":
                 import msvcrt
-                fh.write(" ")
-                fh.flush()
                 fh.seek(0)
                 msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
             else:
