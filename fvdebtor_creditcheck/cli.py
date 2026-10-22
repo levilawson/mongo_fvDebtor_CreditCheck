@@ -108,7 +108,7 @@ def cmd_status(cfg: Config, args) -> int:
         print("counts:", store.counts() or "{}")
         rows = store.list(args.status, args.limit)
         if args.unresolved:
-            rows = [r for r in store.unresolved_accepted()][:args.limit] if "resolved_at" in _cols(store) else []
+            rows = store.unresolved_accepted()[:args.limit]
         for r in rows:
             k = r.keys()
             old = json.loads(r["payload_json"]).get("credit_score")
@@ -121,10 +121,6 @@ def cmd_status(cfg: Config, args) -> int:
     finally:
         store.close()
     return 0
-
-
-def _cols(store: Store) -> set:
-    return {r[1] for r in store.conn.execute("PRAGMA table_info(events)")}
 
 
 def cmd_reconcile(cfg: Config, args) -> int:

@@ -100,8 +100,10 @@ class Store:
 
     def unresolved_accepted(self):
         """Accepted active-route events whose new score has not been observed yet."""
+        have = {r[1] for r in self.conn.execute("PRAGMA table_info(events)")}
+        cond = " AND resolved_at IS NULL" if "resolved_at" in have else ""  # old DB: nothing resolved yet
         rows = self.conn.execute(
-            "SELECT * FROM events WHERE status='accepted' AND resolved_at IS NULL ORDER BY accepted_at").fetchall()
+            f"SELECT * FROM events WHERE status='accepted'{cond} ORDER BY accepted_at").fetchall()
         return [r for r in rows if json.loads(r["payload_json"]).get("is_active") is not False]
 
     def mark_resolved(self, event_key: str, new_score, new_report_date: str):

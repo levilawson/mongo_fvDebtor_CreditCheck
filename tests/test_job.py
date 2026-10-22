@@ -530,3 +530,16 @@ def test_cli_reconcile_and_status(tmp_path, monkeypatch, capsys):
     assert "resolved=1" in capsys.readouterr().out
     assert cli.main(["status"]) == 0
     assert "score=71/A->72/A" in capsys.readouterr().out
+
+
+def test_readonly_status_of_unmigrated_db_lists_accepted_as_unresolved(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.sqlite3"
+    c = sqlite3.connect(path)
+    c.executescript(__import__("fvdebtor_creditcheck.store", fromlist=["SCHEMA"]).SCHEMA)
+    c.execute("INSERT INTO events VALUES ('3442|2026-09-18','fvcr-x','3442','2026-09-18',?, 'accepted',1,"
+              "'2026-10-21T00:00:00Z',NULL,'2026-10-21T00:00:00Z',200,NULL)", (json.dumps({"credit_score": "57B"}),))
+    c.commit(); c.close()
+    ro = Store(path, readonly=True)
+    assert [r["debtor_id"] for r in ro.unresolved_accepted()] == ["3442"]
+    ro.close()
