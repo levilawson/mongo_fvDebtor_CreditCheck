@@ -31,6 +31,16 @@ class Result:
     error: str | None = None
 
 
+class RoutedWebhook:
+    """Sends inactive-debtor events (is_active == False) to the second webhook, everything else to the first."""
+
+    def __init__(self, active: "WebhookClient", inactive: "WebhookClient"):
+        self._active, self._inactive = active, inactive
+
+    def send(self, payload: dict) -> Result:
+        return (self._inactive if payload.get("is_active") is False else self._active).send(payload)
+
+
 def parse_retry_after(value: str | None, cap: float) -> float | None:
     if not value:
         return None

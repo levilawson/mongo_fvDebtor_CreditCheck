@@ -54,6 +54,7 @@ class Summary:
     clients: int = 0
     clients_unresolved: int = 0
     clients_excluded: int = 0
+    inactive: int = 0
     aborted: str | None = None
     dry_run: bool = True
     would_send: list[str] = field(default_factory=list)
@@ -63,7 +64,7 @@ class Summary:
         s = (f"matched={self.matched} duplicate={self.duplicate} already_sent={self.already_sent} "
              f"eligible={self.eligible} selected={self.selected} accepted={self.accepted} "
              f"failed={self.failed} invalid={self.invalid} clients={self.clients} "
-             f"clients_unresolved={self.clients_unresolved} clients_excluded={self.clients_excluded} mode={'dry-run' if self.dry_run else 'send'}")
+             f"clients_unresolved={self.clients_unresolved} clients_excluded={self.clients_excluded} inactive={self.inactive} mode={'dry-run' if self.dry_run else 'send'}")
         return s + (f" ABORTED={self.aborted}" if self.aborted else "")
 
 
@@ -84,7 +85,8 @@ def _deliver(store: Store, client, row, summary: Summary) -> webhook.Result:
 
 def run_job(docs, store: Store, client, send: bool, limit: int | None,
             max_consecutive_failed: int = 3, debtor_id: str | None = None,
-            company_lookup=None, debtor_clients_lookup=None) -> Summary:
+            company_lookup=None, debtor_clients_lookup=None, active_lookup=None,
+            window_days: int = 90) -> Summary:
     summary = Summary(dry_run=not send)
     collected = collect_candidates(docs)
     summary.matched, summary.duplicate = collected.matched, collected.duplicate
@@ -92,12 +94,17 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
     for item in collected.invalid:
         log.warning("invalid record skipped for review: %s", item)
 
+    if active_lookup:
+        active = active_lookup()
+        for cand in collected.candidates:
+            cand.is_active = cand.debtor_id in active
+
     # Filter out accepted events BEFORE applying the limit so they cannot starve the backlog.
     eligible = []
     for cand in collected.candidates:
         if debtor_id is not None and cand.debtor_id != debtor_id:
             continue
-        row = store.get(cand.event_key)
+        row = store.get(cand.store_key())
         if row is not None and row["status"] == "accepted":
             summary.already_sent += 1
         else:
@@ -105,6 +112,7 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
     summary.eligible = len(eligible)
     selected = eligible if limit is None else eligible[:max(limit, 0)]
     summary.selected = len(selected)
+    summary.inactive = sum(1 for c, _ in selected if not c.is_active)
 
     if debtor_clients_lookup and selected:
         linked = debtor_clients_lookup({cand.debtor_id for cand, _ in selected})
@@ -125,14 +133,15 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
 
     if not send:
         summary.would_send = [c.debtor_id for c, _ in selected]
-        summary.previews = [c.build_payload(utc_iso(), companies) for c, _ in selected]
+        summary.previews = [c.build_payload(utc_iso(), companies, window_days) for c, _ in selected]
         return summary
 
     detected_at = utc_iso()
     consecutive = 0
     for cand, row in selected:
-        payload = cand.build_payload(detected_at, companies)
-        row = store.refresh_payload(cand.event_key, payload) if row else store.ensure(cand.event_key, payload)
+        payload = cand.build_payload(detected_at, companies, window_days)
+        key = cand.store_key()
+        row = store.refresh_payload(key, payload) if row else store.ensure(key, payload)
         res = _deliver(store, client, row, summary)
         if res.outcome == webhook.CONFIG_ERROR:
             summary.aborted = f"destination configuration error (HTTP {res.http_status})"

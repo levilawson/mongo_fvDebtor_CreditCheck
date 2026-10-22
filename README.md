@@ -15,6 +15,18 @@ Clients whose `fvCompany` name starts with `Z -` (FactorView's commented-out con
 `clients_unresolved`. Rep data is refreshed on every run until the event is accepted; after acceptance the event is
 never resent, so later rep or client changes are not re-announced.
 
+## Activity routing (second webhook)
+A debtor is **active** if `fvInvoice` has at least one document with `doc.isPurchase: true` and
+`doc.buyDate >= today - 90 days` (UTC; `ACTIVITY_WINDOW_DAYS` to change; one indexed read-only query).
+* Active -> `ZAPIER_WEBHOOK_URL`, `event_type` `factorview.credit_report_expired`, `is_active: true`.
+* Inactive -> `ZAPIER_INACTIVE_WEBHOOK_URL`, `event_type` `factorview.credit_report_expired_inactive`,
+  `is_active: false`, plus `inactive_reason` and `inactivity_window_days`. Same client/rep fields. The Zap should skip
+  CreditSafe and message the reps "no invoices purchased in 90 days or more".
+* The route is part of the dedup key: an inactive event has its own `event_id`, so a debtor that later becomes active
+  (same report date) still sends one active event. Each route is sent at most once per report date.
+* If the query finds no purchases at all in the window (wrong field/format), the run aborts instead of routing everyone
+  to the inactive hook. `--send` and `replay --send` need both webhook URLs set.
+
 ## Delivery semantics (read this)
 * **At least once, not exactly once.** "Accepted" means Zapier returned 2xx (handed to Zapier), not that a
   credit refresh happened. An HTTP timeout can occur *after* Zapier accepted the event; the event is then

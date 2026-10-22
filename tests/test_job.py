@@ -101,7 +101,7 @@ def test_payload_shape_and_string_preservation():
     assert p["debtor_id"] == "1888" and isinstance(p["credit_score"], str)
     assert p["event_id"] == make_event_id("1888", "2026-09-16")
     assert set(p) == {"schema_version", "event_type", "event_id", "detected_at", "debtor_id", "debtor_name",
-                      "credit_score", "credit_report_date", "credit_average_days", "credit_report_expired",
+                      "credit_score", "credit_report_date", "credit_average_days", "credit_report_expired", "is_active", "is_active",
                       "restricted", "mongo_updated_at", "client_count", "clients", "rep_groups"}
 
 
@@ -298,6 +298,7 @@ def test_cli_dry_run_end_to_end(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
     monkeypatch.setattr(cli, "fetch_expired", lambda uri: [doc("1892", client="2565"), doc("5")])
     monkeypatch.setattr(cli, "fetch_companies", lambda uri, ids: COMPANIES)
+    monkeypatch.setattr(cli, "fetch_active_debtors", lambda uri, since: {"1892"})
     monkeypatch.setattr(cli, "fetch_debtor_clients", lambda uri, ids: {"1892": {"2565", "1479"}})
     assert cli.main(["run", "--debtor-id", "1892"]) == 0
     out = capsys.readouterr().out
@@ -373,3 +374,70 @@ def test_event_with_no_clients_is_still_sent_with_zero_count(store):
     runner.run_job([doc("9", client="2")], store, client(sess), True, None, company_lookup=lambda ids: companies)
     p = sess.calls[0][1]["json"]
     assert p["client_count"] == 0 and p["clients"] == [] and p["rep_groups"] == []
+
+
+# ---- activity routing ----
+def test_inactive_debtor_gets_inactive_event_type_flag_and_separate_key(store):
+    sess = FakeSession(Resp(200))
+    runner.run_job([doc("1"), doc("2")], store, client(sess), True, None, active_lookup=lambda: {"2"})
+    by_debtor = {c[1]["json"]["debtor_id"]: c[1]["json"] for c in sess.calls}
+    assert by_debtor["2"]["is_active"] is True and by_debtor["2"]["event_type"] == "factorview.credit_report_expired"
+    p = by_debtor["1"]
+    assert p["is_active"] is False and p["event_type"] == "factorview.credit_report_expired_inactive"
+    assert "90 days" in p["inactive_reason"] and p["inactivity_window_days"] == 90
+    assert p["event_id"] != make_event_id("1", "2026-09-16")
+    assert store.get("1|2026-09-16|inactive")["status"] == "accepted" and store.get("2|2026-09-16")["status"] == "accepted"
+
+
+def test_debtor_becoming_active_sends_active_event_after_inactive_was_sent(store):
+    sess = FakeSession(Resp(200))
+    runner.run_job([doc("1")], store, client(sess), True, None, active_lookup=lambda: set() | {"x"})
+    s = runner.run_job([doc("1")], store, client(sess), True, None, active_lookup=lambda: {"1"})
+    assert s.accepted == 1 and sess.calls[1][1]["json"]["is_active"] is True
+    s = runner.run_job([doc("1")], store, client(sess), True, None, active_lookup=lambda: {"1"})
+    assert s.already_sent == 1 and len(sess.calls) == 2
+
+
+def test_inactive_events_still_carry_clients_and_reps(store):
+    sess = FakeSession(Resp(200))
+    runner.run_job([doc("1", client="2565")], store, client(sess), True, None,
+                   company_lookup=lambda ids: COMPANIES, active_lookup=lambda: {"x"})
+    p = sess.calls[0][1]["json"]
+    assert p["is_active"] is False and p["rep_groups"][0]["account_rep"] == "Christine Dunn"
+
+
+def test_routed_webhook_picks_destination_by_is_active():
+    a, b = FakeSession(Resp(200)), FakeSession(Resp(200))
+    r = webhook.RoutedWebhook(client(a), webhook.WebhookClient("https://other.example/y", 1, 2, 1, 1, 1, session=b))
+    r.send({"is_active": True})
+    r.send({"is_active": False})
+    assert len(a.calls) == 1 and len(b.calls) == 1 and b.calls[0][0] == "https://other.example/y"
+
+
+def test_active_debtor_query_and_empty_window_is_refused():
+    seen = {}
+
+    class Coll:
+        def __init__(self, ids): self.ids = ids
+        def distinct(self, field, q):
+            seen["field"], seen["q"] = field, q
+            return self.ids
+
+    class Db:
+        def __init__(self, ids): self.ids = ids
+        def __getitem__(self, n):
+            seen["coll"] = n
+            return Coll(self.ids)
+
+    def factory(ids):
+        class Cl:
+            def __init__(self, uri, **kw): pass
+            def __getitem__(self, n): return Db(ids)
+            def close(self): pass
+        return Cl
+
+    out = mongo_source.fetch_active_debtors("u", "2026-07-24", factory(["1892", 3442, None]))
+    assert out == {"1892", "3442"} and seen["coll"] == "fvInvoice" and seen["field"] == "doc.debtorId"
+    assert seen["q"] == {"doc.isPurchase": True, "doc.buyDate": {"$gte": "2026-07-24"}}
+    with pytest.raises(mongo_source.SuspiciousActivityData):
+        mongo_source.fetch_active_debtors("u", "2026-07-24", factory([]))

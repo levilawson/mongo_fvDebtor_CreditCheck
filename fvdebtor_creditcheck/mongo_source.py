@@ -79,6 +79,31 @@ def fetch_debtor_clients(uri: str, debtor_ids, client_factory=MongoClient) -> di
             client.close()
 
 
+class SuspiciousActivityData(Exception):
+    """No purchases at all in the window: the date field/format is probably not what we expect."""
+
+
+def fetch_active_debtors(uri: str, since_date: str, client_factory=MongoClient) -> set[str]:
+    """Debtor IDs with at least one purchased invoice (isPurchase, buyDate >= since_date). Read-only.
+
+    buyDate is compared as an ISO string (YYYY-MM-DD...). Uses the (isPurchase, buyDate) index.
+    """
+    client = None
+    try:
+        client = _open(uri, client_factory)
+        coll = client[MONGO_DB]["fvInvoice"]
+        ids = coll.distinct("doc.debtorId", {"doc.isPurchase": True, "doc.buyDate": {"$gte": since_date}})
+    except Exception as exc:  # noqa: BLE001
+        raise MongoReadError(type(exc).__name__) from None
+    finally:
+        if client is not None:
+            client.close()
+    active = {str(i) for i in ids if i is not None}
+    if not active:
+        raise SuspiciousActivityData("no purchased invoices found in the activity window")
+    return active
+
+
 def fetch_expired(uri: str, client_factory=MongoClient) -> list[dict]:
     client = None
     try:

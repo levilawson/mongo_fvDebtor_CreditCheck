@@ -9,6 +9,8 @@ from typing import Any, Iterable
 
 SCHEMA_VERSION = 1
 EVENT_TYPE = "factorview.credit_report_expired"
+EVENT_TYPE_INACTIVE = "factorview.credit_report_expired_inactive"
+INACTIVE_SUFFIX = "|inactive"
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -88,8 +90,9 @@ def make_event_key(debtor_id: str, report_date: str) -> str:
     return f"{debtor_id}|{report_date}"
 
 
-def make_event_id(debtor_id: str, report_date: str) -> str:
-    digest = hashlib.sha256(make_event_key(debtor_id, report_date).encode()).hexdigest()
+def make_event_id(debtor_id: str, report_date: str, active: bool = True) -> str:
+    key = make_event_key(debtor_id, report_date) + ("" if active else INACTIVE_SUFFIX)
+    digest = hashlib.sha256(key.encode()).hexdigest()
     return f"fvcr-{digest[:32]}"
 
 
@@ -126,8 +129,13 @@ class Candidate:
     doc: dict
     updated_sort: tuple[int, float]
     client_ids: set = field(default_factory=set)
+    is_active: bool = True
 
-    def build_payload(self, detected_at: str, companies: dict | None = None) -> dict:
+    def store_key(self) -> str:
+        """Active events keep the plain key; inactive-route events are tracked separately."""
+        return self.event_key + ("" if self.is_active else INACTIVE_SUFFIX)
+
+    def build_payload(self, detected_at: str, companies: dict | None = None, window_days: int = 90) -> dict:
         companies = companies or {}
         clients = []
         for cid in sorted(self.client_ids):
@@ -139,10 +147,10 @@ class Candidate:
         score = cr.get("score")
         avg = cr.get("averageDays")
         name = d.get("name")
-        return {
+        payload = {
             "schema_version": SCHEMA_VERSION,
-            "event_type": EVENT_TYPE,
-            "event_id": make_event_id(self.debtor_id, self.report_date),
+            "event_type": EVENT_TYPE if self.is_active else EVENT_TYPE_INACTIVE,
+            "event_id": make_event_id(self.debtor_id, self.report_date, self.is_active),
             "detected_at": detected_at,
             "debtor_id": self.debtor_id,
             "debtor_name": name if isinstance(name, str) else None,
@@ -150,12 +158,17 @@ class Candidate:
             "credit_report_date": self.report_date,
             "credit_average_days": avg if isinstance(avg, int) and not isinstance(avg, bool) else None,
             "credit_report_expired": True,
+            "is_active": self.is_active,
             "restricted": d.get("restricted") if isinstance(d.get("restricted"), bool) else None,
             "mongo_updated_at": _serialize_updated_at(self.doc.get("updatedAt")),
             "client_count": len(clients),
             "clients": clients,
             "rep_groups": build_rep_groups(clients),
         }
+        if not self.is_active:
+            payload["inactive_reason"] = f"no invoices purchased in {window_days} days or more"
+            payload["inactivity_window_days"] = window_days
+        return payload
 
 
 @dataclass

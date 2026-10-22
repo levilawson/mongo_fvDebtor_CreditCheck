@@ -6,13 +6,15 @@ import json
 import logging
 import logging.handlers
 import sys
+from datetime import datetime, timedelta, timezone
 
 from .config import Config, ConfigError, load_config
 from .events import utc_iso
-from .mongo_source import MongoReadError, fetch_companies, fetch_debtor_clients, fetch_expired
+from .mongo_source import (MongoReadError, SuspiciousActivityData, fetch_active_debtors, fetch_companies,
+                           fetch_debtor_clients, fetch_expired)
 from .runner import AlreadyRunning, replay_event, run_job, single_instance
 from .store import Store
-from .webhook import WebhookClient
+from .webhook import RoutedWebhook, WebhookClient
 
 log = logging.getLogger("fvdebtor_creditcheck")
 
@@ -30,9 +32,11 @@ def setup_logging(cfg: Config) -> None:
     logging.getLogger("urllib3").setLevel(logging.WARNING)  # avoid URL-bearing debug lines
 
 
-def build_client(cfg: Config) -> WebhookClient:
-    return WebhookClient(cfg.require_webhook(), cfg.connect_timeout, cfg.read_timeout,
-                         cfg.max_attempts, cfg.backoff_base, cfg.retry_after_max)
+def build_client(cfg: Config) -> RoutedWebhook:
+    def one(url):
+        return WebhookClient(url, cfg.connect_timeout, cfg.read_timeout,
+                             cfg.max_attempts, cfg.backoff_base, cfg.retry_after_max)
+    return RoutedWebhook(one(cfg.require_webhook()), one(cfg.require_inactive_webhook()))
 
 
 def parser() -> argparse.ArgumentParser:
@@ -59,14 +63,18 @@ def cmd_run(cfg: Config, args) -> int:
         return 2
     if args.send:
         cfg.require_webhook()
+        cfg.require_inactive_webhook()
     docs = fetch_expired(cfg.require_mongo())
     lookup = lambda ids: fetch_companies(cfg.require_mongo(), ids)  # noqa: E731
+    since = (datetime.now(timezone.utc).date() - timedelta(days=cfg.activity_window_days)).isoformat()
+    active = lambda: fetch_active_debtors(cfg.require_mongo(), since)  # noqa: E731
     linked = lambda ids: fetch_debtor_clients(cfg.require_mongo(), ids)  # noqa: E731
     if not args.send:
         store = Store(cfg.state_db_path, readonly=True)  # dry-run never writes
         try:
             summary = run_job(docs, store, None, False, args.limit, debtor_id=args.debtor_id,
-                              company_lookup=lookup, debtor_clients_lookup=linked)
+                              company_lookup=lookup, debtor_clients_lookup=linked,
+                              active_lookup=active, window_days=cfg.activity_window_days)
         finally:
             store.close()
         print(f"[dry-run] would send debtor_ids: {summary.would_send}")
@@ -82,7 +90,8 @@ def cmd_run(cfg: Config, args) -> int:
             try:
                 summary = run_job(docs, store, build_client(cfg), True, args.limit,
                                   cfg.max_consecutive_failed_events, debtor_id=args.debtor_id,
-                                  company_lookup=lookup, debtor_clients_lookup=linked)
+                                  company_lookup=lookup, debtor_clients_lookup=linked,
+                                  active_lookup=active, window_days=cfg.activity_window_days)
             finally:
                 store.close()
     log.info("run summary: %s", summary.line())
@@ -115,6 +124,7 @@ def cmd_replay(cfg: Config, args) -> int:
               f"report_date={row['report_date']} status={row['status']}; add --send to transmit")
         return 0
     cfg.require_webhook()
+    cfg.require_inactive_webhook()
     with single_instance(cfg.lock_path):
         store = Store(cfg.state_db_path)
         try:
@@ -139,6 +149,9 @@ def main(argv=None) -> int:
         return 2
     except MongoReadError as exc:
         log.error("mongo read failed: %s", exc)
+        return 3
+    except SuspiciousActivityData as exc:
+        log.error("activity check aborted the run: %s", exc)
         return 3
     except AlreadyRunning:
         log.warning("another run is in progress; exiting")
