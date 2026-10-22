@@ -32,6 +32,7 @@ class Config:
     retry_after_max: float = 60.0
     max_consecutive_failed_events: int = 3
     activity_window_days: int = 90
+    reconcile_stale_days: int = 3
 
     def require_mongo(self) -> str:
         if not self.mongo_uri:
@@ -75,6 +76,7 @@ def load_config() -> Config:
             retry_after_max=float(os.environ.get("WEBHOOK_RETRY_AFTER_MAX_SECONDS", 60)),
             max_consecutive_failed_events=int(os.environ.get("MAX_CONSECUTIVE_FAILED_EVENTS", 3)),
             activity_window_days=int(os.environ.get("ACTIVITY_WINDOW_DAYS", 90)),
+            reconcile_stale_days=int(os.environ.get("RECONCILE_STALE_DAYS", 3)),
         )
     except ValueError as exc:
         raise ConfigError(f"invalid numeric setting: {exc}") from None

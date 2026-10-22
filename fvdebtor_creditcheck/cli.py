@@ -11,8 +11,8 @@ from datetime import datetime, timedelta, timezone
 from .config import Config, ConfigError, load_config
 from .events import utc_iso
 from .mongo_source import (MongoReadError, SuspiciousActivityData, fetch_active_debtors, fetch_companies,
-                           fetch_debtor_clients, fetch_expired)
-from .runner import AlreadyRunning, replay_event, run_job, single_instance
+                           fetch_current_ratings, fetch_debtor_clients, fetch_expired)
+from .runner import AlreadyRunning, reconcile, replay_event, run_job, single_instance
 from .store import Store
 from .webhook import RoutedWebhook, WebhookClient
 
@@ -51,6 +51,9 @@ def parser() -> argparse.ArgumentParser:
     s = sub.add_parser("status", help="show delivery status")
     s.add_argument("--status", choices=["pending", "failed", "accepted"])
     s.add_argument("--limit", type=int, default=50)
+    s.add_argument("--unresolved", action="store_true",
+                   help="accepted events with no newer credit report seen in Mongo yet")
+    sub.add_parser("reconcile", help="record new scores for accepted events once Mongo shows a newer credit report")
     rp = sub.add_parser("replay", help="resend a stored event with the same event_id")
     rp.add_argument("event_id")
     rp.add_argument("--send", action="store_true", help="actually POST (default: show what would be sent)")
@@ -103,12 +106,37 @@ def cmd_status(cfg: Config, args) -> int:
     store = Store(cfg.state_db_path, readonly=True)
     try:
         print("counts:", store.counts() or "{}")
-        for r in store.list(args.status, args.limit):
+        rows = store.list(args.status, args.limit)
+        if args.unresolved:
+            rows = [r for r in store.unresolved_accepted()][:args.limit] if "resolved_at" in _cols(store) else []
+        for r in rows:
+            k = r.keys()
+            old = json.loads(r["payload_json"]).get("credit_score")
+            new = r["new_score"] if "new_score" in k else None
+            resolved = r["resolved_at"] if "resolved_at" in k else None
             print(f"{r['event_id']}  debtor={r['debtor_id']}  report_date={r['report_date']}  "
                   f"status={r['status']}  attempts={r['attempts']}  last_attempt={r['last_attempt_at']}  "
-                  f"http={r['last_http_status']}  error={r['last_error']}")
+                  f"http={r['last_http_status']}  error={r['last_error']}  "
+                  f"score={old}->{new if resolved else '?'}  resolved_at={resolved}")
     finally:
         store.close()
+    return 0
+
+
+def _cols(store: Store) -> set:
+    return {r[1] for r in store.conn.execute("PRAGMA table_info(events)")}
+
+
+def cmd_reconcile(cfg: Config, args) -> int:
+    ratings = lambda ids: fetch_current_ratings(cfg.require_mongo(), ids)  # noqa: E731
+    with single_instance(cfg.lock_path):
+        store = Store(cfg.state_db_path)
+        try:
+            summary = reconcile(store, ratings, cfg.reconcile_stale_days)
+        finally:
+            store.close()
+    log.info("reconcile summary: %s", summary.line())
+    print(summary.line())
     return 0
 
 
@@ -143,7 +171,8 @@ def main(argv=None) -> int:
     try:
         cfg = load_config()
         setup_logging(cfg)
-        return {"run": cmd_run, "status": cmd_status, "replay": cmd_replay}[args.cmd](cfg, args)
+        return {"run": cmd_run, "status": cmd_status, "replay": cmd_replay,
+                "reconcile": cmd_reconcile}[args.cmd](cfg, args)
     except ConfigError as exc:
         print(f"configuration error: {exc}", file=sys.stderr)
         return 2

@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS events (
 """
 
 
+NEW_COLUMNS = {"resolved_at": "TEXT", "new_score": "TEXT", "new_report_date": "TEXT"}
+
+
 class Store:
     def __init__(self, path: Path | None, readonly: bool = False):
         """path=None or a missing DB in readonly mode -> empty in-memory view."""
@@ -42,6 +45,10 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         if not readonly or not self.persistent:
             self.conn.executescript(SCHEMA)
+            have = {r[1] for r in self.conn.execute("PRAGMA table_info(events)")}
+            for col, typ in NEW_COLUMNS.items():
+                if col not in have:
+                    self.conn.execute(f"ALTER TABLE events ADD COLUMN {col} {typ}")
             self.conn.commit()
 
     def close(self):
@@ -89,6 +96,17 @@ class Store:
                 "UPDATE events SET status=CASE WHEN status='accepted' THEN status ELSE 'failed' END,"
                 " attempts=attempts+?, last_attempt_at=?, last_http_status=?, last_error=? WHERE event_key=?",
                 (attempts, now, http_status, error, event_key))
+        self.conn.commit()
+
+    def unresolved_accepted(self):
+        """Accepted active-route events whose new score has not been observed yet."""
+        rows = self.conn.execute(
+            "SELECT * FROM events WHERE status='accepted' AND resolved_at IS NULL ORDER BY accepted_at").fetchall()
+        return [r for r in rows if json.loads(r["payload_json"]).get("is_active") is not False]
+
+    def mark_resolved(self, event_key: str, new_score, new_report_date: str):
+        self.conn.execute("UPDATE events SET resolved_at=?, new_score=?, new_report_date=? WHERE event_key=?",
+                          (utc_iso(), new_score, new_report_date, event_key))
         self.conn.commit()
 
     def list(self, status: str | None = None, limit: int = 50):

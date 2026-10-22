@@ -27,6 +27,19 @@ A debtor is **active** if `fvInvoice` has at least one document with `doc.isPurc
 * If the query finds no purchases at all in the window (wrong field/format), the run aborts instead of routing everyone
   to the inactive hook. `--send` and `replay --send` need both webhook URLs set.
 
+## Tracking the new score (`reconcile`)
+Zapier doesn't write back to this PC. The Zap updates FactorView, Mongo syncs it back, and `reconcile` (read-only on Mongo)
+records the result in SQLite: for each accepted active-route event with no result yet, if any `fvDebtor` document for the
+debtor now has a credit report date **newer** than the one we sent, it stores `new_score`, `new_report_date` and
+`resolved_at` (the newest report wins). A new report that is itself expired later is a separate event. Inactive-route
+events are not reconciled (no refresh is expected). Events still unresolved after `RECONCILE_STALE_DAYS` (default 3) are
+logged as warnings and counted as `stale`. Existing databases are migrated automatically.
+```powershell
+& $PY -m fvdebtor_creditcheck reconcile                 # summary: checked, resolved, unresolved, stale
+& $PY -m fvdebtor_creditcheck status                    # shows score=old->new and resolved_at
+& $PY -m fvdebtor_creditcheck status --unresolved       # accepted events still waiting for a new report
+```
+
 ## Delivery semantics (read this)
 * **At least once, not exactly once.** "Accepted" means Zapier returned 2xx (handed to Zapier), not that a
   credit refresh happened. An HTTP timeout can occur *after* Zapier accepted the event; the event is then

@@ -104,6 +104,33 @@ def fetch_active_debtors(uri: str, since_date: str, client_factory=MongoClient) 
     return active
 
 
+def fetch_current_ratings(uri: str, debtor_ids, client_factory=MongoClient) -> dict[str, list[dict]]:
+    """Current creditRating (score/date) and updatedAt of every fvDebtor document per debtor. Read-only."""
+    ids = sorted({str(i) for i in debtor_ids})
+    out: dict[str, list[dict]] = {}
+    if not ids:
+        return out
+    client = None
+    try:
+        client = _open(uri, client_factory)
+        coll = client[MONGO_DB][MONGO_COLLECTION]
+        proj = {"_id": 0, "doc.id": 1, "doc.creditRating.score": 1, "doc.creditRating.date": 1, "updatedAt": 1}
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            chunk = chunk + [int(x) for x in chunk if x.isdigit()]
+            for d in coll.find({"doc.id": {"$in": chunk}}, proj):
+                x = d.get("doc") or {}
+                out.setdefault(str(x.get("id")), []).append(
+                    {"score": (x.get("creditRating") or {}).get("score"),
+                     "date": (x.get("creditRating") or {}).get("date"), "updatedAt": d.get("updatedAt")})
+        return out
+    except Exception as exc:  # noqa: BLE001
+        raise MongoReadError(type(exc).__name__) from None
+    finally:
+        if client is not None:
+            client.close()
+
+
 def fetch_expired(uri: str, client_factory=MongoClient) -> list[dict]:
     client = None
     try:

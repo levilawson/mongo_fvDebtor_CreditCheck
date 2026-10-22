@@ -9,7 +9,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import webhook
-from .events import collect_candidates, is_commented_out, utc_iso
+from datetime import datetime, timezone
+
+from .events import (InvalidRecord, _updated_sort_key, collect_candidates, is_commented_out,
+                     parse_report_date, utc_iso)
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -150,6 +153,55 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
         if consecutive >= max_consecutive_failed:
             summary.aborted = f"{consecutive} consecutive failed events"
             break
+    return summary
+
+
+@dataclass
+class ReconcileSummary:
+    checked: int = 0
+    resolved: int = 0
+    unresolved: int = 0
+    stale: int = 0
+
+    def line(self) -> str:
+        return (f"checked={self.checked} resolved={self.resolved} unresolved={self.unresolved} "
+                f"stale={self.stale}")
+
+
+def _newest_rating(docs: list[dict]):
+    best = None
+    for d in docs:
+        try:
+            date_ = parse_report_date(d.get("date"))
+        except InvalidRecord:
+            continue
+        key = (date_, _updated_sort_key(d.get("updatedAt")))
+        if best is None or key > best[0]:
+            best = (key, d.get("score"), date_)
+    return best
+
+
+def reconcile(store: Store, ratings_lookup, stale_days: int = 3, now: datetime | None = None) -> ReconcileSummary:
+    """Record the new score once Mongo (synced from FactorView) shows a report newer than the one we sent."""
+    now = now or datetime.now(timezone.utc)
+    summary = ReconcileSummary()
+    rows = store.unresolved_accepted()
+    ratings = ratings_lookup({r["debtor_id"] for r in rows}) if rows else {}
+    for row in rows:
+        summary.checked += 1
+        best = _newest_rating(ratings.get(row["debtor_id"], []))
+        if best and best[2] > row["report_date"]:
+            score = best[1] if best[1] is None or isinstance(best[1], str) else str(best[1])
+            store.mark_resolved(row["event_key"], score, best[2])
+            summary.resolved += 1
+            log.info("resolved event_id=%s debtor_id=%s new_report_date=%s", row["event_id"], row["debtor_id"], best[2])
+            continue
+        summary.unresolved += 1
+        accepted = datetime.fromisoformat(row["accepted_at"].replace("Z", "+00:00"))
+        if (now - accepted).days >= stale_days:
+            summary.stale += 1
+            log.warning("event_id=%s debtor_id=%s accepted %d+ days ago, no newer credit report in Mongo yet",
+                        row["event_id"], row["debtor_id"], stale_days)
     return summary
 
 

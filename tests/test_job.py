@@ -441,3 +441,92 @@ def test_active_debtor_query_and_empty_window_is_refused():
     assert seen["q"] == {"doc.isPurchase": True, "doc.buyDate": {"$gte": "2026-07-24"}}
     with pytest.raises(mongo_source.SuspiciousActivityData):
         mongo_source.fetch_active_debtors("u", "2026-07-24", factory([]))
+
+
+# ---- reconcile ----
+def _sent(store, *debtors, active=lambda: {"1", "2", "3"}):
+    runner.run_job([doc(d, "2026-09-16", score="71/A") for d in debtors], store,
+                   client(FakeSession(Resp(200))), True, None, active_lookup=active)
+
+
+def test_reconcile_records_new_score_when_newer_report_appears(store):
+    _sent(store, "1", "2")
+    ratings = {"1": [{"score": "72/A", "date": "2026-10-20", "updatedAt": "2026-10-21T00:00:00Z"},
+                     {"score": "60/C", "date": "2026-09-16", "updatedAt": "2026-10-22T00:00:00Z"}],
+               "2": [{"score": "71/A", "date": "2026-09-16", "updatedAt": "2026-10-22T00:00:00Z"}]}
+    s = runner.reconcile(store, lambda ids: ratings)
+    assert (s.checked, s.resolved, s.unresolved) == (2, 1, 1)
+    row = store.get("1|2026-09-16")
+    assert row["new_score"] == "72/A" and row["new_report_date"] == "2026-10-20" and row["resolved_at"]
+    assert store.get("2|2026-09-16")["resolved_at"] is None
+    # resolved events are not checked again
+    assert runner.reconcile(store, lambda ids: ratings).checked == 1
+
+
+def test_reconcile_flags_stale_unresolved_and_ignores_inactive_route_and_failed(store):
+    _sent(store, "1")
+    _sent(store, "2", active=lambda: {"x"})  # inactive route: no refresh expected
+    runner.run_job([doc("3")], store, client(FakeSession(Resp(400))), True, None)  # failed, not accepted
+    later = datetime(2099, 1, 1, tzinfo=timezone.utc)
+    s = runner.reconcile(store, lambda ids: {}, stale_days=3, now=later)
+    assert (s.checked, s.stale) == (1, 1)
+
+
+def test_reconcile_skips_malformed_dates_and_handles_nothing_to_do(store):
+    _sent(store, "1")
+    s = runner.reconcile(store, lambda ids: {"1": [{"score": "9/A", "date": "2026-13-99", "updatedAt": None}]})
+    assert s.resolved == 0 and s.unresolved == 1
+    assert runner.reconcile(Store(None), lambda ids: {}).checked == 0
+
+
+def test_existing_database_without_new_columns_is_migrated(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.sqlite3"
+    c = sqlite3.connect(path)
+    c.executescript(__import__("fvdebtor_creditcheck.store", fromlist=["SCHEMA"]).SCHEMA)
+    c.execute("INSERT INTO events VALUES ('3442|2026-09-18','fvcr-x','3442','2026-09-18',?, 'accepted',1,"
+              "'2026-10-21T00:00:00Z',NULL,'2026-10-21T00:00:00Z',200,NULL)", (json.dumps({"credit_score": "57B"}),))
+    c.commit(); c.close()
+    s = Store(path)
+    assert s.get("3442|2026-09-18")["resolved_at"] is None
+    assert len(s.unresolved_accepted()) == 1
+    s.close()
+
+
+def test_fetch_current_ratings_query_is_read_only_lookup_by_debtor():
+    seen = {}
+
+    class Coll:
+        def find(self, q, p):
+            seen["q"] = q
+            return [{"doc": {"id": "1", "creditRating": {"score": "72/A", "date": "2026-10-20"}}, "updatedAt": "u"}]
+
+    class Db:
+        def __getitem__(self, n): return Coll()
+
+    class Cl:
+        def __init__(self, uri, **kw): pass
+        def __getitem__(self, n): return Db()
+        def close(self): pass
+
+    out = mongo_source.fetch_current_ratings("u", ["1"], Cl)
+    assert seen["q"] == {"doc.id": {"$in": ["1", 1]}} and out["1"][0]["score"] == "72/A"
+
+
+def test_cli_reconcile_and_status(tmp_path, monkeypatch, capsys):
+    from fvdebtor_creditcheck import cli
+    for k, v in {"MONGO_URI": "mongodb://u:pw@h", "ZAPIER_WEBHOOK_URL": "https://h.example/x",
+                 "STATE_DB_PATH": str(tmp_path / "s.sqlite3"), "LOCK_PATH": str(tmp_path / "l.lock"),
+                 "LOG_DIR": str(tmp_path / "logs")}.items():
+        monkeypatch.setenv(k, v)
+    st = Store(tmp_path / "s.sqlite3")
+    _sent(st, "1")
+    st.close()
+    monkeypatch.setattr(cli, "fetch_current_ratings",
+                        lambda uri, ids: {"1": [{"score": "72/A", "date": "2026-10-20", "updatedAt": None}]})
+    assert cli.main(["status", "--unresolved"]) == 0
+    assert "score=71/A->?" in capsys.readouterr().out
+    assert cli.main(["reconcile"]) == 0
+    assert "resolved=1" in capsys.readouterr().out
+    assert cli.main(["status"]) == 0
+    assert "score=71/A->72/A" in capsys.readouterr().out
