@@ -7,6 +7,7 @@ import dataclasses
 import json
 import logging
 import logging.handlers
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -76,6 +77,15 @@ def parser() -> argparse.ArgumentParser:
     return p
 
 
+def _exclude_re(cfg: Config):
+    if not cfg.client_exclude_regex:
+        return None
+    try:
+        return re.compile(cfg.client_exclude_regex, re.IGNORECASE)
+    except re.error:
+        raise ConfigError("CLIENT_EXCLUDE_REGEX is not a valid regular expression") from None
+
+
 def _summary_dict(summary) -> dict:
     d = dataclasses.asdict(summary)
     d.pop("would_send", None)
@@ -106,7 +116,7 @@ def cmd_run(cfg: Config, args) -> int:
                               active_lookup=active, window_days=window,
                               expired_within_days=args.expired_within_days,
                               skip_inactive=bool(args.purchased_within_days),
-                              validity_days=cfg.report_validity_days)
+                              validity_days=cfg.report_validity_days, exclude_regex=_exclude_re(cfg))
         finally:
             store.close()
         print(f"[dry-run] would send debtor_ids: {summary.would_send}")
@@ -129,7 +139,7 @@ def cmd_run(cfg: Config, args) -> int:
                                   active_lookup=active, window_days=window,
                                   expired_within_days=args.expired_within_days,
                                   skip_inactive=bool(args.purchased_within_days),
-                                  validity_days=cfg.report_validity_days)
+                                  validity_days=cfg.report_validity_days, exclude_regex=_exclude_re(cfg))
                 store.finish_run(_summary_dict(summary), summary.aborted)
             finally:
                 store.close()

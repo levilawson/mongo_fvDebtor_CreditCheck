@@ -11,7 +11,7 @@ from pathlib import Path
 from . import webhook
 from datetime import date, datetime, timedelta, timezone
 
-from .events import (InvalidRecord, _updated_sort_key, collect_candidates, is_commented_out,
+from .events import (InvalidRecord, _updated_sort_key, collect_candidates, is_excluded_client,
                      parse_report_date, utc_iso)
 from .store import Store
 
@@ -90,7 +90,7 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
             max_consecutive_failed: int = 3, debtor_id: str | None = None,
             company_lookup=None, debtor_clients_lookup=None, active_lookup=None,
             window_days: int = 90, expired_within_days: int | None = None, skip_inactive: bool = False,
-            today: date | None = None, validity_days: int = 30) -> Summary:
+            today: date | None = None, validity_days: int = 30, exclude_regex=None) -> Summary:
     summary = Summary(dry_run=not send)
     collected = collect_candidates(docs)
     summary.matched, summary.duplicate = collected.matched, collected.duplicate
@@ -136,7 +136,7 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
 
     all_ids = {c for cand, _ in selected for c in cand.client_ids}
     companies = company_lookup(all_ids) if company_lookup and all_ids else {}
-    excluded = {c for c in all_ids if is_commented_out((companies.get(c) or {}).get("name"))}
+    excluded = {c for c in all_ids if is_excluded_client((companies.get(c) or {}).get("name"), exclude_regex)}
     for cand, _ in selected:
         cand.client_ids -= excluded
     all_ids -= excluded

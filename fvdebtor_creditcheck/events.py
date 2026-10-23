@@ -48,12 +48,15 @@ def parse_report_date(value: Any) -> str:
     return value.strip()
 
 
-_COMMENTED_OUT_RE = re.compile(r"^\s*z\s*-", re.IGNORECASE)
+# Clients never included in events: FactorView's commented-out convention ('Z - ...') and test clients
+# whose name starts with the word "Test" ("Test Company", "Test - ABC"; not "Testa Energy" or "Contest Co").
+_EXCLUDED_CLIENT_RES = [re.compile(r"^\s*z\s*-", re.IGNORECASE), re.compile(r"^\s*test\b", re.IGNORECASE)]
 
 
-def is_commented_out(name: Any) -> bool:
-    """FactorView convention: companies prefixed 'Z -' are commented out (inactive)."""
-    return isinstance(name, str) and bool(_COMMENTED_OUT_RE.match(name))
+def is_excluded_client(name: Any, extra: "re.Pattern | None" = None) -> bool:
+    if not isinstance(name, str):
+        return False
+    return any(r.match(name) for r in _EXCLUDED_CLIENT_RES + ([extra] if extra else []))
 
 
 def _join_and(items: list[str]) -> str:

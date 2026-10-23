@@ -9,7 +9,8 @@ Each debtor event includes `clients`: every `clientId` linked to the debtor in `
 regardless of each record's expired flag), resolved against `fvCompany` by `doc.id`:
 `{"client_id", "client_name", "account_rep"}`. `rep_groups` regroups the same clients per account rep (null rep last) with a ready-made `clients_text`
 ("Name (FV ID: 1), Name (FV ID: 2), and Name (FV ID: 3)") so the Zap can loop over reps and send one message each.
-Clients whose `fvCompany` name starts with `Z -` (FactorView's commented-out convention) are excluded
+Clients whose `fvCompany` name starts with `Z -` (FactorView's commented-out convention) or with the word `Test`
+("Test Company"; not "Testa Energy") are excluded, plus anything matching the optional `CLIENT_EXCLUDE_REGEX`
 (`clients_excluded` in the summary). `client_count` is the number of clients after exclusions. An event with `client_count: 0` is still sent
 (the Zap routes it to the AE manager). Debtors are never filtered by name. Unresolved clients are sent with null name/rep and counted in
 `clients_unresolved`. Rep data is refreshed on every run until the event is accepted; after acceptance the event is

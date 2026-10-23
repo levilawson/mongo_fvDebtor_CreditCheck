@@ -355,17 +355,23 @@ def test_rep_groups_are_per_rep_with_message_text():
     assert g[2]["clients_text"] == "Unnamed client (FV ID: 4)"
 
 
-def test_z_prefixed_clients_excluded(store):
+def test_z_and_test_clients_excluded_but_lookalikes_kept(store):
     sess = FakeSession(Resp(200))
     companies = {"1": {"name": "Good Co", "accountRep": "AE A"},
                  "2": {"name": "Z - Old Co", "accountRep": None},
                  "3": {"name": " z-Old Co 2", "accountRep": None},
-                 "4": {"name": "Zephyr Energy", "accountRep": "AE B"}}
+                 "4": {"name": "Zephyr Energy", "accountRep": "AE B"},
+                 "5": {"name": "Test Company", "accountRep": None},
+                 "6": {"name": "test - ABC", "accountRep": None},
+                 "7": {"name": "Testa Energy", "accountRep": "AE C"},
+                 "8": {"name": "Texas Test & Inspection LLC", "accountRep": "AE D"},
+                 "9": {"name": "Demo Oil", "accountRep": None}}
     s = runner.run_job([doc("9", client="1")], store, client(sess), True, None,
                        company_lookup=lambda ids: companies,
-                       debtor_clients_lookup=lambda ids: {"9": {"1", "2", "3", "4"}})
-    assert s.clients_excluded == 2 and s.clients == 2
-    assert [c["client_id"] for c in sess.calls[0][1]["json"]["clients"]] == ["1", "4"]
+                       debtor_clients_lookup=lambda ids: {"9": set(companies)},
+                       exclude_regex=__import__("re").compile(r"^\s*demo\b", __import__("re").I))
+    assert s.clients_excluded == 5 and s.clients == 4
+    assert [c["client_id"] for c in sess.calls[0][1]["json"]["clients"]] == ["1", "4", "7", "8"]
 
 
 def test_event_with_no_clients_is_still_sent_with_zero_count(store):
