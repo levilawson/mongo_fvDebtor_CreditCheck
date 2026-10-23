@@ -65,17 +65,22 @@ def _join_and(items: list[str]) -> str:
     return ", ".join(items[:-1]) + ", and " + items[-1]
 
 
+def client_label(client_id: str, client_name: str | None) -> str:
+    return f"{client_name or 'Unnamed client'} (FV ID: {client_id})"
+
+
 def build_rep_groups(clients: list[dict]) -> list[dict]:
     """One entry per account rep (null rep last) with a ready-to-use client sentence fragment."""
     groups: dict[str | None, list[dict]] = {}
     for c in clients:
         groups.setdefault(c["account_rep"], []).append(
-            {"client_id": c["client_id"], "client_name": c["client_name"]})
+            {"client_id": c["client_id"], "client_name": c["client_name"], "client_label": c["client_label"]})
     out = []
     for rep in sorted(groups, key=lambda r: (r is None, (r or "").lower())):
         members = groups[rep]
-        text = _join_and([f"{m['client_name'] or 'Unnamed client'} (FV ID: {m['client_id']})" for m in members])
-        out.append({"account_rep": rep, "client_count": len(members), "clients": members, "clients_text": text})
+        labels = [m["client_label"] for m in members]
+        out.append({"account_rep": rep, "client_count": len(members), "clients": members,
+                    "clients_text": _join_and(labels), "clients_lines": "\n".join(labels)})
     return out
 
 
@@ -145,6 +150,7 @@ class Candidate:
         for cid in sorted(self.client_ids):
             co = companies.get(cid) or {}
             clients.append({"client_id": cid, "client_name": co.get("name"),
+                            "client_label": client_label(cid, co.get("name")),
                             "account_rep": co.get("accountRep")})
         d = self.doc.get("doc") or {}
         cr = d.get("creditRating") or {}

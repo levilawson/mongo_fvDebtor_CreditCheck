@@ -251,9 +251,12 @@ def test_clients_unioned_across_duplicates_and_enriched(store):
     s = runner.run_job(docs, store, client(sess), True, None, company_lookup=lambda ids: COMPANIES)
     assert s.duplicate == 2 and s.clients == 3 and s.clients_unresolved == 1 and len(sess.calls) == 1
     assert sess.calls[0][1]["json"]["clients"] == [
-        {"client_id": "1479", "client_name": "Other Client", "account_rep": None},
-        {"client_id": "2565", "client_name": "Raine Energy Services LLC", "account_rep": "Christine Dunn"},
-        {"client_id": "9999", "client_name": None, "account_rep": None}]
+        {"client_id": "1479", "client_name": "Other Client", "client_label": "Other Client (FV ID: 1479)",
+         "account_rep": None},
+        {"client_id": "2565", "client_name": "Raine Energy Services LLC",
+         "client_label": "Raine Energy Services LLC (FV ID: 2565)", "account_rep": "Christine Dunn"},
+        {"client_id": "9999", "client_name": None, "client_label": "Unnamed client (FV ID: 9999)",
+         "account_rep": None}]
 
 
 def test_failed_event_payload_refreshed_but_event_id_and_detected_at_kept(store):
@@ -341,6 +344,7 @@ def test_debtor_clients_query_ignores_expired_flag():
 
 def test_rep_groups_are_per_rep_with_message_text():
     from fvdebtor_creditcheck.events import build_rep_groups
+    from fvdebtor_creditcheck.events import client_label
     clients = [
         {"client_id": "2565", "client_name": "Raine Energy LLC", "account_rep": "AE A"},
         {"client_id": "1", "client_name": "Client ABC", "account_rep": "AE A"},
@@ -348,6 +352,8 @@ def test_rep_groups_are_per_rep_with_message_text():
         {"client_id": "3", "client_name": "Client CDE", "account_rep": "AE B"},
         {"client_id": "4", "client_name": None, "account_rep": None},
     ]
+    for c in clients:
+        c["client_label"] = client_label(c["client_id"], c["client_name"])
     g = build_rep_groups(clients)
     assert [x["account_rep"] for x in g] == ["AE A", "AE B", None]
     assert g[0]["clients_text"] == "Raine Energy LLC (FV ID: 2565), Client ABC (FV ID: 1), and Client BCD (FV ID: 2)"
@@ -684,3 +690,15 @@ def test_z_prefix_variants_all_excluded():
     from fvdebtor_creditcheck.events import is_excluded_client as ex
     assert all(ex(n) for n in ["Z - Old", "Z- Old", "Z-Old", " z -Old", "z-"])
     assert not any(ex(n) for n in ["Zephyr", "Z Energy", "Zeta-Co", "Testa"])
+
+
+def test_client_label_on_same_line_and_lines_per_rep():
+    p = collect_candidates([doc("9", client="2565")]).candidates[0].build_payload("t", COMPANIES)
+    assert p["clients"][0]["client_label"] == "Raine Energy Services LLC (FV ID: 2565)"
+    g = p["rep_groups"][0]
+    assert g["clients"][0]["client_label"] == "Raine Energy Services LLC (FV ID: 2565)"
+    assert g["clients_lines"] == "Raine Energy Services LLC (FV ID: 2565)"
+    from fvdebtor_creditcheck.events import build_rep_groups
+    two = build_rep_groups([{"client_id": "1", "client_name": "A", "client_label": "A (FV ID: 1)", "account_rep": "X"},
+                            {"client_id": "2", "client_name": "B", "client_label": "B (FV ID: 2)", "account_rep": "X"}])
+    assert two[0]["clients_lines"] == "A (FV ID: 1)\nB (FV ID: 2)"

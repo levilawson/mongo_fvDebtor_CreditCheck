@@ -7,7 +7,8 @@ It never calls FactorView. Zapier later does the CreditSafe lookup, FactorView u
 ## Payload: clients and account reps
 Each debtor event includes `clients`: every `clientId` linked to the debtor in `fvDebtor` (looked up by debtor ID,
 regardless of each record's expired flag), resolved against `fvCompany` by `doc.id`:
-`{"client_id", "client_name", "account_rep"}`. `rep_groups` regroups the same clients per account rep (null rep last) with a ready-made `clients_text`
+`{"client_id", "client_name", "client_label", "account_rep"}`, where `client_label` is the ID and name on one line
+(`Name (FV ID: 1085)`). Each `rep_groups` entry also has `clients_lines` (one label per line) next to `clients_text`. `rep_groups` regroups the same clients per account rep (null rep last) with a ready-made `clients_text`
 ("Name (FV ID: 1), Name (FV ID: 2), and Name (FV ID: 3)") so the Zap can loop over reps and send one message each.
 Clients whose `fvCompany` name starts with `Z -` (FactorView's commented-out convention) or with the word `Test`
 ("Test Company"; not "Testa Energy") are excluded, plus anything matching the optional `CLIENT_EXCLUDE_REGEX`
