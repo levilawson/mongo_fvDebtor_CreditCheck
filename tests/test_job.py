@@ -543,3 +543,47 @@ def test_readonly_status_of_unmigrated_db_lists_accepted_as_unresolved(tmp_path)
     ro = Store(path, readonly=True)
     assert [r["debtor_id"] for r in ro.unresolved_accepted()] == ["3442"]
     ro.close()
+
+
+# ---- rollout cohort filters ----
+TODAY = datetime(2026, 10, 23, tzinfo=timezone.utc).date()
+
+
+def test_expired_within_days_uses_report_date_as_expiry(store):
+    sess = FakeSession(Resp(200))
+    docs = [doc("1", "2026-10-22"), doc("2", "2026-09-23"), doc("3", "2026-09-22"), doc("4", "2026-10-24")]
+    s = runner.run_job(docs, store, client(sess), False, None, expired_within_days=30, today=TODAY)
+    assert s.would_send == ["1", "2"] and s.skipped_expired_window == 2 and s.eligible == 2
+
+
+def test_purchased_within_days_skips_inactive_instead_of_routing(store):
+    sess = FakeSession(Resp(200))
+    s = runner.run_job([doc("1"), doc("2")], store, client(sess), True, None,
+                       active_lookup=lambda: {"2"}, skip_inactive=True)
+    assert s.skipped_inactive == 1 and s.accepted == 1 and s.inactive == 0
+    assert [c[1]["json"]["debtor_id"] for c in sess.calls] == ["2"]
+    assert store.get("1|2026-09-16|inactive") is None and store.get("1|2026-09-16") is None
+
+
+def test_limit_applies_after_cohort_filters(store):
+    sess = FakeSession(Resp(200))
+    docs = [doc("1", "2026-01-01"), doc("2", "2026-01-01"), doc("3", "2026-10-20")]
+    s = runner.run_job(docs, store, client(sess), True, 1, expired_within_days=30, today=TODAY)
+    assert s.accepted == 1 and sess.calls[0][1]["json"]["debtor_id"] == "3"
+
+
+def test_cli_cohort_flags(tmp_path, monkeypatch, capsys):
+    from fvdebtor_creditcheck import cli
+    for k, v in {"MONGO_URI": "mongodb://u:pw@h", "STATE_DB_PATH": str(tmp_path / "s.sqlite3"),
+                 "LOCK_PATH": str(tmp_path / "l.lock"), "LOG_DIR": str(tmp_path / "logs")}.items():
+        monkeypatch.setenv(k, v)
+    recent = (datetime.now(timezone.utc).date() - __import__("datetime").timedelta(days=5)).isoformat()
+    monkeypatch.setattr(cli, "fetch_expired", lambda uri: [doc("1", recent), doc("2", recent), doc("3", "2020-01-01")])
+    monkeypatch.setattr(cli, "fetch_companies", lambda uri, ids: COMPANIES)
+    monkeypatch.setattr(cli, "fetch_debtor_clients", lambda uri, ids: {})
+    seen = {}
+    monkeypatch.setattr(cli, "fetch_active_debtors", lambda uri, since: seen.setdefault("since", since) and {"1"})
+    assert cli.main(["run", "--expired-within-days", "30", "--purchased-within-days", "30"]) == 0
+    out = capsys.readouterr().out
+    assert "['1']" in out and "skipped_expired_window=1" in out and "skipped_inactive=1" in out
+    assert cli.main(["run", "--expired-within-days", "0"]) == 2

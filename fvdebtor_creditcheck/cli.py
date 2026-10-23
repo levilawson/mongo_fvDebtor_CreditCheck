@@ -47,6 +47,11 @@ def parser() -> argparse.ArgumentParser:
     r.add_argument("--limit", type=int, help="max eligible, unsent events to process")
     r.add_argument("--show-payload", action="store_true",
                    help="dry-run only: print the JSON payload(s) that would be sent")
+    r.add_argument("--expired-within-days", type=int, metavar="N",
+                   help="only reports whose report (expiry) date is within the last N days")
+    r.add_argument("--purchased-within-days", type=int, metavar="N",
+                   help="only debtors with an invoice purchased in the last N days; others are skipped "
+                        "(not sent to the inactive webhook)")
     r.add_argument("--debtor-id", help="only process this debtor ID (e.g. for a single test)")
     s = sub.add_parser("status", help="show delivery status")
     s.add_argument("--status", choices=["pending", "failed", "accepted"])
@@ -61,15 +66,18 @@ def parser() -> argparse.ArgumentParser:
 
 
 def cmd_run(cfg: Config, args) -> int:
-    if args.limit is not None and args.limit < 1:
-        print("--limit must be >= 1", file=sys.stderr)
-        return 2
+    for name in ("limit", "expired_within_days", "purchased_within_days"):
+        v = getattr(args, name)
+        if v is not None and v < 1:
+            print(f"--{name.replace('_', '-')} must be >= 1", file=sys.stderr)
+            return 2
     if args.send:
         cfg.require_webhook()
         cfg.require_inactive_webhook()
     docs = fetch_expired(cfg.require_mongo())
     lookup = lambda ids: fetch_companies(cfg.require_mongo(), ids)  # noqa: E731
-    since = (datetime.now(timezone.utc).date() - timedelta(days=cfg.activity_window_days)).isoformat()
+    window = args.purchased_within_days or cfg.activity_window_days
+    since = (datetime.now(timezone.utc).date() - timedelta(days=window)).isoformat()
     active = lambda: fetch_active_debtors(cfg.require_mongo(), since)  # noqa: E731
     linked = lambda ids: fetch_debtor_clients(cfg.require_mongo(), ids)  # noqa: E731
     if not args.send:
@@ -77,7 +85,9 @@ def cmd_run(cfg: Config, args) -> int:
         try:
             summary = run_job(docs, store, None, False, args.limit, debtor_id=args.debtor_id,
                               company_lookup=lookup, debtor_clients_lookup=linked,
-                              active_lookup=active, window_days=cfg.activity_window_days)
+                              active_lookup=active, window_days=window,
+                              expired_within_days=args.expired_within_days,
+                              skip_inactive=bool(args.purchased_within_days))
         finally:
             store.close()
         print(f"[dry-run] would send debtor_ids: {summary.would_send}")
@@ -94,7 +104,9 @@ def cmd_run(cfg: Config, args) -> int:
                 summary = run_job(docs, store, build_client(cfg), True, args.limit,
                                   cfg.max_consecutive_failed_events, debtor_id=args.debtor_id,
                                   company_lookup=lookup, debtor_clients_lookup=linked,
-                                  active_lookup=active, window_days=cfg.activity_window_days)
+                                  active_lookup=active, window_days=window,
+                                  expired_within_days=args.expired_within_days,
+                                  skip_inactive=bool(args.purchased_within_days))
             finally:
                 store.close()
     log.info("run summary: %s", summary.line())

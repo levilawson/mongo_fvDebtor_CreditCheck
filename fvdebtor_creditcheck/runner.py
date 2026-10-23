@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import webhook
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from .events import (InvalidRecord, _updated_sort_key, collect_candidates, is_commented_out,
                      parse_report_date, utc_iso)
@@ -56,6 +56,8 @@ class Summary:
     clients_unresolved: int = 0
     clients_excluded: int = 0
     inactive: int = 0
+    skipped_expired_window: int = 0
+    skipped_inactive: int = 0
     aborted: str | None = None
     dry_run: bool = True
     would_send: list[str] = field(default_factory=list)
@@ -65,7 +67,7 @@ class Summary:
         s = (f"matched={self.matched} duplicate={self.duplicate} already_sent={self.already_sent} "
              f"eligible={self.eligible} selected={self.selected} accepted={self.accepted} "
              f"failed={self.failed} invalid={self.invalid} clients={self.clients} "
-             f"clients_unresolved={self.clients_unresolved} clients_excluded={self.clients_excluded} inactive={self.inactive} mode={'dry-run' if self.dry_run else 'send'}")
+             f"clients_unresolved={self.clients_unresolved} clients_excluded={self.clients_excluded} inactive={self.inactive} skipped_expired_window={self.skipped_expired_window} skipped_inactive={self.skipped_inactive} mode={'dry-run' if self.dry_run else 'send'}")
         return s + (f" ABORTED={self.aborted}" if self.aborted else "")
 
 
@@ -87,7 +89,8 @@ def _deliver(store: Store, client, row, summary: Summary) -> webhook.Result:
 def run_job(docs, store: Store, client, send: bool, limit: int | None,
             max_consecutive_failed: int = 3, debtor_id: str | None = None,
             company_lookup=None, debtor_clients_lookup=None, active_lookup=None,
-            window_days: int = 90) -> Summary:
+            window_days: int = 90, expired_within_days: int | None = None, skip_inactive: bool = False,
+            today: date | None = None) -> Summary:
     summary = Summary(dry_run=not send)
     collected = collect_candidates(docs)
     summary.matched, summary.duplicate = collected.matched, collected.duplicate
@@ -100,10 +103,21 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
         for cand in collected.candidates:
             cand.is_active = cand.debtor_id in active
 
+    today = today or datetime.now(timezone.utc).date()
+
     # Filter out accepted events BEFORE applying the limit so they cannot starve the backlog.
     eligible = []
     for cand in collected.candidates:
         if debtor_id is not None and cand.debtor_id != debtor_id:
+            continue
+        if expired_within_days is not None:
+            # The credit report date is the expiry date: keep reports that expired in the last N days.
+            report = date.fromisoformat(cand.report_date)
+            if not (today - timedelta(days=expired_within_days) <= report <= today):
+                summary.skipped_expired_window += 1
+                continue
+        if skip_inactive and not cand.is_active:
+            summary.skipped_inactive += 1
             continue
         row = store.get(cand.store_key())
         if row is not None and row["status"] == "accepted":
