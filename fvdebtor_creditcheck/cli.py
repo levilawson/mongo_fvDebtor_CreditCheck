@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import dataclasses
 import json
 import logging
 import logging.handlers
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from .config import Config, ConfigError, load_config
 from .events import utc_iso
@@ -58,11 +61,26 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--limit", type=int, default=50)
     s.add_argument("--unresolved", action="store_true",
                    help="accepted events with no newer credit report seen in Mongo yet")
+    h = sub.add_parser("history", help="all stored events, delivery attempts and scores for one debtor")
+    h.add_argument("debtor_id")
+    rn = sub.add_parser("runs", help="recent job runs (sends, replays, reconciles)")
+    rn.add_argument("--limit", type=int, default=20)
+    ex = sub.add_parser("export", help="write all events with old/new scores to a CSV file")
+    ex.add_argument("--out", help="CSV path (default: state/export_<UTC date>.csv)")
+    bk = sub.add_parser("backup", help="consistent copy of the SQLite database")
+    bk.add_argument("--out", help="path (default: state/backup_<UTC timestamp>.sqlite3)")
     sub.add_parser("reconcile", help="record new scores for accepted events once Mongo shows a newer credit report")
     rp = sub.add_parser("replay", help="resend a stored event with the same event_id")
     rp.add_argument("event_id")
     rp.add_argument("--send", action="store_true", help="actually POST (default: show what would be sent)")
     return p
+
+
+def _summary_dict(summary) -> dict:
+    d = dataclasses.asdict(summary)
+    d.pop("would_send", None)
+    d.pop("previews", None)
+    return d
 
 
 def cmd_run(cfg: Config, args) -> int:
@@ -101,6 +119,9 @@ def cmd_run(cfg: Config, args) -> int:
     else:
         with single_instance(cfg.lock_path):
             store = Store(cfg.state_db_path)
+            store.start_run("run --send", {"limit": args.limit, "debtor_id": args.debtor_id,
+                                           "expired_within_days": args.expired_within_days,
+                                           "purchased_within_days": args.purchased_within_days})
             try:
                 summary = run_job(docs, store, build_client(cfg), True, args.limit,
                                   cfg.max_consecutive_failed_events, debtor_id=args.debtor_id,
@@ -109,6 +130,7 @@ def cmd_run(cfg: Config, args) -> int:
                                   expired_within_days=args.expired_within_days,
                                   skip_inactive=bool(args.purchased_within_days),
                                   validity_days=cfg.report_validity_days)
+                store.finish_run(_summary_dict(summary), summary.aborted)
             finally:
                 store.close()
     log.info("run summary: %s", summary.line())
@@ -137,12 +159,90 @@ def cmd_status(cfg: Config, args) -> int:
     return 0
 
 
+def cmd_runs(cfg: Config, args) -> int:
+    store = Store(cfg.state_db_path)
+    try:
+        for r in store.runs(args.limit):
+            s = json.loads(r["summary_json"]) if r["summary_json"] else {}
+            counts = " ".join(f"{k}={v}" for k, v in s.items() if k != "dry_run" and v not in (None, 0, False))
+            print(f"#{r['run_id']}  {r['started_at']} -> {r['finished_at'] or 'unfinished'}  {r['command']}  "
+                  f"{r['options_json']}  {counts}" + (f"  ABORTED={r['aborted']}" if r["aborted"] else ""))
+    finally:
+        store.close()
+    return 0
+
+
+def cmd_history(cfg: Config, args) -> int:
+    store = Store(cfg.state_db_path)
+    try:
+        h = store.debtor_history(args.debtor_id)
+        print(f"debtor {args.debtor_id}: {len(h['events'])} event(s)")
+        for r in h["events"]:
+            print(f"  event {r['event_id']} report_date={r['report_date']} status={r['status']} "
+                  f"first_seen={r['first_seen_at']} accepted_at={r['accepted_at']} resolved_at={r['resolved_at']}")
+        print("scores observed:")
+        for r in h["scores"]:
+            print(f"  {r['observed_at']}  report_date={r['report_date']}  score={r['score']}  ({r['source']})")
+        print("delivery attempts:")
+        for r in h["attempts"]:
+            print(f"  {r['attempted_at']}  run=#{r['run_id']}  {r['outcome']}  http={r['http_status']}  "
+                  f"tries={r['tries']}  error={r['error']}")
+    finally:
+        store.close()
+    return 0
+
+
+EXPORT_COLUMNS = ["event_id", "debtor_id", "debtor_name", "event_type", "report_date", "expires_on", "old_score",
+                  "new_score", "new_report_date", "status", "attempts", "first_seen_at", "accepted_at",
+                  "resolved_at", "last_http_status", "last_error", "client_count", "clients"]
+
+
+def cmd_export(cfg: Config, args) -> int:
+    out = Path(args.out) if args.out else cfg.state_db_path.parent / f"export_{utc_iso()[:10]}.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    store = Store(cfg.state_db_path)
+    try:
+        rows = store.conn.execute("SELECT * FROM events ORDER BY first_seen_at").fetchall()
+        with open(out, "w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=EXPORT_COLUMNS)
+            w.writeheader()
+            for r in rows:
+                p = json.loads(r["payload_json"])
+                w.writerow({
+                    "event_id": r["event_id"], "debtor_id": r["debtor_id"], "debtor_name": p.get("debtor_name"),
+                    "event_type": p.get("event_type"), "report_date": r["report_date"],
+                    "expires_on": p.get("credit_report_expires_on"), "old_score": p.get("credit_score"),
+                    "new_score": r["new_score"], "new_report_date": r["new_report_date"], "status": r["status"],
+                    "attempts": r["attempts"], "first_seen_at": r["first_seen_at"], "accepted_at": r["accepted_at"],
+                    "resolved_at": r["resolved_at"], "last_http_status": r["last_http_status"],
+                    "last_error": r["last_error"], "client_count": p.get("client_count"),
+                    "clients": "; ".join(f"{c['client_id']} {c['client_name']} ({c['account_rep']})"
+                                         for c in p.get("clients", []))})
+    finally:
+        store.close()
+    print(f"wrote {len(rows)} event(s) to {out}")
+    return 0
+
+
+def cmd_backup(cfg: Config, args) -> int:
+    out = Path(args.out) if args.out else cfg.state_db_path.parent / f"backup_{utc_iso().replace(':', '')}.sqlite3"
+    store = Store(cfg.state_db_path)
+    try:
+        store.backup_to(out)
+    finally:
+        store.close()
+    print(f"backup written to {out}")
+    return 0
+
+
 def cmd_reconcile(cfg: Config, args) -> int:
     ratings = lambda ids: fetch_current_ratings(cfg.require_mongo(), ids)  # noqa: E731
     with single_instance(cfg.lock_path):
         store = Store(cfg.state_db_path)
+        store.start_run("reconcile", {})
         try:
             summary = reconcile(store, ratings, cfg.reconcile_stale_days)
+            store.finish_run(_summary_dict(summary))
         finally:
             store.close()
     log.info("reconcile summary: %s", summary.line())
@@ -165,8 +265,10 @@ def cmd_replay(cfg: Config, args) -> int:
     cfg.require_inactive_webhook()
     with single_instance(cfg.lock_path):
         store = Store(cfg.state_db_path)
+        store.start_run("replay --send", {"event_id": args.event_id})
         try:
             summary = replay_event(store, build_client(cfg), args.event_id)
+            store.finish_run(_summary_dict(summary), summary.aborted)
         except KeyError:
             print("unknown event_id", file=sys.stderr)
             return 2
@@ -182,7 +284,8 @@ def main(argv=None) -> int:
         cfg = load_config()
         setup_logging(cfg)
         return {"run": cmd_run, "status": cmd_status, "replay": cmd_replay,
-                "reconcile": cmd_reconcile}[args.cmd](cfg, args)
+                "reconcile": cmd_reconcile, "history": cmd_history, "runs": cmd_runs,
+                "export": cmd_export, "backup": cmd_backup}[args.cmd](cfg, args)
     except ConfigError as exc:
         print(f"configuration error: {exc}", file=sys.stderr)
         return 2

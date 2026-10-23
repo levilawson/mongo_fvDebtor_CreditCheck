@@ -597,3 +597,78 @@ def test_cli_cohort_flags(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "['1']" in out and "skipped_expired_window=1" in out and "skipped_inactive=1" in out
     assert cli.main(["run", "--expired-within-days", "0"]) == 2
+
+
+# ---- local history ----
+def _env(monkeypatch, tmp_path):
+    for k, v in {"MONGO_URI": "mongodb://u:pw@h", "ZAPIER_WEBHOOK_URL": "https://h.example/x",
+                 "ZAPIER_INACTIVE_WEBHOOK_URL": "https://h.example/y",
+                 "STATE_DB_PATH": str(tmp_path / "s.sqlite3"), "LOCK_PATH": str(tmp_path / "l.lock"),
+                 "LOG_DIR": str(tmp_path / "logs")}.items():
+        monkeypatch.setenv(k, v)
+
+
+def test_attempts_and_scores_are_recorded_with_run_id(store):
+    rid = store.start_run("run --send", {"limit": 1})
+    runner.run_job([doc("1", score="71/A")], store, client(FakeSession(Resp(500), Resp(200)), attempts=1), True, None)
+    runner.run_job([doc("1", score="71/A")], store, client(FakeSession(Resp(200))), True, None)
+    store.finish_run({"accepted": 1})
+    h = store.debtor_history("1")
+    assert [a["outcome"] for a in h["attempts"]] == ["failed", "accepted"] and h["attempts"][0]["run_id"] == rid
+    assert [(s["score"], s["source"]) for s in h["scores"]] == [("71/A", "detected")]
+    assert store.runs()[0]["finished_at"] and "accepted" in store.runs()[0]["summary_json"]
+
+
+def test_refreshed_score_added_to_history_on_reconcile(store):
+    _sent(store, "1")
+    runner.reconcile(store, lambda ids: {"1": [{"score": "72/A", "date": "2026-10-20", "updatedAt": None}]})
+    assert [(s["score"], s["source"]) for s in store.debtor_history("1")["scores"]] == \
+        [("71/A", "detected"), ("72/A", "refreshed")]
+
+
+def test_backfill_seeds_scores_for_pre_history_events(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.sqlite3"
+    c = sqlite3.connect(path)
+    c.executescript("""CREATE TABLE events (event_key TEXT PRIMARY KEY, event_id TEXT NOT NULL UNIQUE,
+        debtor_id TEXT NOT NULL, report_date TEXT NOT NULL, payload_json TEXT NOT NULL, status TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0, first_seen_at TEXT NOT NULL, last_attempt_at TEXT, accepted_at TEXT,
+        last_http_status INTEGER, last_error TEXT);""")
+    c.execute("INSERT INTO events VALUES ('3442|2026-09-18','fvcr-x','3442','2026-09-18',?, 'accepted',1,"
+              "'2026-10-21T00:00:00Z',NULL,'2026-10-21T00:00:00Z',200,NULL)", (json.dumps({"credit_score": "57B"}),))
+    c.commit(); c.close()
+    s = Store(path)
+    assert [(r["score"], r["source"]) for r in s.debtor_history("3442")["scores"]] == [("57B", "detected")]
+    s.close()
+    s = Store(path)  # idempotent
+    assert len(s.debtor_history("3442")["scores"]) == 1
+    s.close()
+
+
+def test_cli_runs_history_export_backup(tmp_path, monkeypatch, capsys):
+    import csv as _csv
+    from fvdebtor_creditcheck import cli
+    _env(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "fetch_expired", lambda uri: [doc("1892", "2026-09-08", score="71/A", client="2565")])
+    monkeypatch.setattr(cli, "fetch_companies", lambda uri, ids: COMPANIES)
+    monkeypatch.setattr(cli, "fetch_debtor_clients", lambda uri, ids: {})
+    monkeypatch.setattr(cli, "fetch_active_debtors", lambda uri, since: {"1892"})
+    monkeypatch.setattr(cli, "build_client", lambda cfg: client(FakeSession(Resp(200))))
+    assert cli.main(["run", "--send", "--debtor-id", "1892"]) == 0
+    capsys.readouterr()
+    assert cli.main(["runs"]) == 0
+    out = capsys.readouterr().out
+    assert "run --send" in out and "accepted=1" in out and "mongodb" not in out and "h.example" not in out
+    assert cli.main(["history", "1892"]) == 0
+    out = capsys.readouterr().out
+    assert "score=71/A" in out and "(detected)" in out and "accepted" in out
+    csv_path = tmp_path / "e.csv"
+    assert cli.main(["export", "--out", str(csv_path)]) == 0
+    rows = list(_csv.DictReader(open(csv_path, encoding="utf-8")))
+    assert rows[0]["debtor_id"] == "1892" and rows[0]["old_score"] == "71/A" and "Christine Dunn" in rows[0]["clients"]
+    assert rows[0]["expires_on"] == "2026-10-08"
+    bk = tmp_path / "b.sqlite3"
+    assert cli.main(["backup", "--out", str(bk)]) == 0
+    restored = Store(bk)
+    assert restored.get("1892|2026-09-08")["status"] == "accepted"
+    restored.close()

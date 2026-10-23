@@ -55,6 +55,21 @@ narrow the first rollout (applied before dedup and before `--limit`, so the limi
 ```
 Without these flags the full routing above applies (inactive debtors go to the second webhook).
 
+## Local history (everything stays on this PC)
+`state\deliveries.sqlite3` holds: `events` (latest state per event, with old/new score), `runs` (every send, replay and
+reconcile with its options and summary; dry-runs write nothing), `attempts` (every delivery attempt with HTTP status and
+error), and `score_history` (the score at detection, source `detected`, and the refreshed score once Mongo shows a newer
+report, source `refreshed`). Databases created before these tables are upgraded and back-filled automatically.
+```powershell
+& $PY -m fvdebtor_creditcheck runs --limit 20          # recent runs
+& $PY -m fvdebtor_creditcheck history 1892             # events, scores over time and attempts for one debtor
+& $PY -m fvdebtor_creditcheck export --out C:\path\events.csv   # all events with old/new scores and clients (CSV)
+& $PY -m fvdebtor_creditcheck backup                   # consistent copy to state\backup_<timestamp>.sqlite3
+```
+Back up regularly (the backup command is safe while the job is idle) and keep copies off this PC: the database is the only
+record of what was sent, and losing it would let the job resend. Exports contain debtor/client/rep names; `*.csv` and
+`state/` are git-ignored.
+
 ## Delivery semantics (read this)
 * **At least once, not exactly once.** "Accepted" means Zapier returned 2xx (handed to Zapier), not that a
   credit refresh happened. An HTTP timeout can occur *after* Zapier accepted the event; the event is then

@@ -15,6 +15,7 @@ logs/
 *.db
 *.lock
 *.log
+*.csv
 
 # python
 .venv/
