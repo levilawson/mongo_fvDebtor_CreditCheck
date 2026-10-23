@@ -101,7 +101,7 @@ def test_payload_shape_and_string_preservation():
     assert p["debtor_id"] == "1888" and isinstance(p["credit_score"], str)
     assert p["event_id"] == make_event_id("1888", "2026-09-16")
     assert set(p) == {"schema_version", "event_type", "event_id", "detected_at", "debtor_id", "debtor_name",
-                      "credit_score", "credit_report_date", "credit_average_days", "credit_report_expired", "is_active", "is_active",
+                      "credit_score", "credit_report_date", "credit_average_days", "credit_report_expired", "is_active", "credit_report_expires_on",
                       "restricted", "mongo_updated_at", "client_count", "clients", "rep_groups"}
 
 
@@ -549,11 +549,21 @@ def test_readonly_status_of_unmigrated_db_lists_accepted_as_unresolved(tmp_path)
 TODAY = datetime(2026, 10, 23, tzinfo=timezone.utc).date()
 
 
-def test_expired_within_days_uses_report_date_as_expiry(store):
+def test_expired_within_days_is_report_date_plus_validity(store):
     sess = FakeSession(Resp(200))
-    docs = [doc("1", "2026-10-22"), doc("2", "2026-09-23"), doc("3", "2026-09-22"), doc("4", "2026-10-24")]
+    # today 2026-10-23, 30-day validity, window 30 -> expiry must be within 2026-09-23..2026-10-23
+    docs = [doc("1", "2026-09-23"), doc("2", "2026-08-24"), doc("3", "2026-08-23"), doc("4", "2026-09-24"),
+            doc("5", "2026-10-20")]
     s = runner.run_job(docs, store, client(sess), False, None, expired_within_days=30, today=TODAY)
-    assert s.would_send == ["1", "2"] and s.skipped_expired_window == 2 and s.eligible == 2
+    assert s.would_send == ["1", "2"] and s.skipped_expired_window == 3
+    s = runner.run_job(docs, store, client(sess), False, None, expired_within_days=30, today=TODAY, validity_days=10)
+    assert s.would_send == ["1", "4"]  # 10-day validity: expiries 10-03 and 10-04 are in range; 5 expires in the future
+
+
+def test_payload_has_expiry_date_from_validity():
+    p = collect_candidates([doc("1", "2026-09-18")]).candidates[0].build_payload("t")
+    assert p["credit_report_expires_on"] == "2026-10-18"
+    assert collect_candidates([doc("1", "2026-09-18")]).candidates[0].build_payload("t", None, 90, 45)["credit_report_expires_on"] == "2026-11-02"
 
 
 def test_purchased_within_days_skips_inactive_instead_of_routing(store):
@@ -567,7 +577,7 @@ def test_purchased_within_days_skips_inactive_instead_of_routing(store):
 
 def test_limit_applies_after_cohort_filters(store):
     sess = FakeSession(Resp(200))
-    docs = [doc("1", "2026-01-01"), doc("2", "2026-01-01"), doc("3", "2026-10-20")]
+    docs = [doc("1", "2026-01-01"), doc("2", "2026-01-01"), doc("3", "2026-09-20")]
     s = runner.run_job(docs, store, client(sess), True, 1, expired_within_days=30, today=TODAY)
     assert s.accepted == 1 and sess.calls[0][1]["json"]["debtor_id"] == "3"
 
@@ -577,7 +587,7 @@ def test_cli_cohort_flags(tmp_path, monkeypatch, capsys):
     for k, v in {"MONGO_URI": "mongodb://u:pw@h", "STATE_DB_PATH": str(tmp_path / "s.sqlite3"),
                  "LOCK_PATH": str(tmp_path / "l.lock"), "LOG_DIR": str(tmp_path / "logs")}.items():
         monkeypatch.setenv(k, v)
-    recent = (datetime.now(timezone.utc).date() - __import__("datetime").timedelta(days=5)).isoformat()
+    recent = (datetime.now(timezone.utc).date() - __import__("datetime").timedelta(days=45)).isoformat()
     monkeypatch.setattr(cli, "fetch_expired", lambda uri: [doc("1", recent), doc("2", recent), doc("3", "2020-01-01")])
     monkeypatch.setattr(cli, "fetch_companies", lambda uri, ids: COMPANIES)
     monkeypatch.setattr(cli, "fetch_debtor_clients", lambda uri, ids: {})

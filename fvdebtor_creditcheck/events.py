@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable
 
 SCHEMA_VERSION = 1
@@ -135,7 +135,8 @@ class Candidate:
         """Active events keep the plain key; inactive-route events are tracked separately."""
         return self.event_key + ("" if self.is_active else INACTIVE_SUFFIX)
 
-    def build_payload(self, detected_at: str, companies: dict | None = None, window_days: int = 90) -> dict:
+    def build_payload(self, detected_at: str, companies: dict | None = None, window_days: int = 90,
+                      validity_days: int = 30) -> dict:
         companies = companies or {}
         clients = []
         for cid in sorted(self.client_ids):
@@ -156,6 +157,7 @@ class Candidate:
             "debtor_name": name if isinstance(name, str) else None,
             "credit_score": score if isinstance(score, str) else (None if score is None else str(score)),
             "credit_report_date": self.report_date,
+            "credit_report_expires_on": (date.fromisoformat(self.report_date) + timedelta(days=validity_days)).isoformat(),
             "credit_average_days": avg if isinstance(avg, int) and not isinstance(avg, bool) else None,
             "credit_report_expired": True,
             "is_active": self.is_active,

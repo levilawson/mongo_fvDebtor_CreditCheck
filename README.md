@@ -41,9 +41,11 @@ logged as warnings and counted as `stale`. Existing databases are migrated autom
 ```
 
 ## Rollout cohort filters
-The FactorView credit report date (`credit_report_date`) is the report's expiry date. Two optional `run` flags
+`credit_report_date` (FactorView `creditRating.date`) is when the rating was last updated. A report expires
+`REPORT_VALIDITY_DAYS` later (default 30), shown in the payload as `credit_report_expires_on`. Two optional `run` flags
 narrow the first rollout (applied before dedup and before `--limit`, so the limit counts only cohort events):
-* `--expired-within-days N`: only reports whose date is in the last N days (not in the future). 90 is used for the rollout so long-dormant debtors (years past expiry) are ignored.
+* `--expired-within-days N`: only reports whose expiry date (report date + validity) falls in the last N days (not in the
+  future). 90 is used for the rollout so long-dormant debtors (years past expiry) are ignored.
 * `--purchased-within-days N`: only debtors with an invoice purchased in the last N days. Other debtors are
   **skipped** (counted as `skipped_inactive`), not sent to the inactive webhook, and nothing is recorded for them,
   so widening or removing the flags later picks them up automatically.

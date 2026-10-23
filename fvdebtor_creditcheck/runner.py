@@ -90,7 +90,7 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
             max_consecutive_failed: int = 3, debtor_id: str | None = None,
             company_lookup=None, debtor_clients_lookup=None, active_lookup=None,
             window_days: int = 90, expired_within_days: int | None = None, skip_inactive: bool = False,
-            today: date | None = None) -> Summary:
+            today: date | None = None, validity_days: int = 30) -> Summary:
     summary = Summary(dry_run=not send)
     collected = collect_candidates(docs)
     summary.matched, summary.duplicate = collected.matched, collected.duplicate
@@ -111,9 +111,9 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
         if debtor_id is not None and cand.debtor_id != debtor_id:
             continue
         if expired_within_days is not None:
-            # The credit report date is the expiry date: keep reports that expired in the last N days.
-            report = date.fromisoformat(cand.report_date)
-            if not (today - timedelta(days=expired_within_days) <= report <= today):
+            # creditRating.date is when the rating was last updated; it expires validity_days later.
+            expires = date.fromisoformat(cand.report_date) + timedelta(days=validity_days)
+            if not (today - timedelta(days=expired_within_days) <= expires <= today):
                 summary.skipped_expired_window += 1
                 continue
         if skip_inactive and not cand.is_active:
@@ -148,13 +148,13 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
 
     if not send:
         summary.would_send = [c.debtor_id for c, _ in selected]
-        summary.previews = [c.build_payload(utc_iso(), companies, window_days) for c, _ in selected]
+        summary.previews = [c.build_payload(utc_iso(), companies, window_days, validity_days) for c, _ in selected]
         return summary
 
     detected_at = utc_iso()
     consecutive = 0
     for cand, row in selected:
-        payload = cand.build_payload(detected_at, companies, window_days)
+        payload = cand.build_payload(detected_at, companies, window_days, validity_days)
         key = cand.store_key()
         row = store.refresh_payload(key, payload) if row else store.ensure(key, payload)
         res = _deliver(store, client, row, summary)

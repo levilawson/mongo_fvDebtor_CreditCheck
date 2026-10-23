@@ -33,6 +33,7 @@ class Config:
     max_consecutive_failed_events: int = 3
     activity_window_days: int = 90
     reconcile_stale_days: int = 3
+    report_validity_days: int = 30
 
     def require_mongo(self) -> str:
         if not self.mongo_uri:
@@ -77,6 +78,7 @@ def load_config() -> Config:
             max_consecutive_failed_events=int(os.environ.get("MAX_CONSECUTIVE_FAILED_EVENTS", 3)),
             activity_window_days=int(os.environ.get("ACTIVITY_WINDOW_DAYS", 90)),
             reconcile_stale_days=int(os.environ.get("RECONCILE_STALE_DAYS", 3)),
+            report_validity_days=int(os.environ.get("REPORT_VALIDITY_DAYS", 30)),
         )
     except ValueError as exc:
         raise ConfigError(f"invalid numeric setting: {exc}") from None

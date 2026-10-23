@@ -48,7 +48,7 @@ def parser() -> argparse.ArgumentParser:
     r.add_argument("--show-payload", action="store_true",
                    help="dry-run only: print the JSON payload(s) that would be sent")
     r.add_argument("--expired-within-days", type=int, metavar="N",
-                   help="only reports whose report (expiry) date is within the last N days")
+                   help="only reports that expired (report date + REPORT_VALIDITY_DAYS) within the last N days")
     r.add_argument("--purchased-within-days", type=int, metavar="N",
                    help="only debtors with an invoice purchased in the last N days; others are skipped "
                         "(not sent to the inactive webhook)")
@@ -87,7 +87,8 @@ def cmd_run(cfg: Config, args) -> int:
                               company_lookup=lookup, debtor_clients_lookup=linked,
                               active_lookup=active, window_days=window,
                               expired_within_days=args.expired_within_days,
-                              skip_inactive=bool(args.purchased_within_days))
+                              skip_inactive=bool(args.purchased_within_days),
+                              validity_days=cfg.report_validity_days)
         finally:
             store.close()
         print(f"[dry-run] would send debtor_ids: {summary.would_send}")
@@ -106,7 +107,8 @@ def cmd_run(cfg: Config, args) -> int:
                                   company_lookup=lookup, debtor_clients_lookup=linked,
                                   active_lookup=active, window_days=window,
                                   expired_within_days=args.expired_within_days,
-                                  skip_inactive=bool(args.purchased_within_days))
+                                  skip_inactive=bool(args.purchased_within_days),
+                                  validity_days=cfg.report_validity_days)
             finally:
                 store.close()
     log.info("run summary: %s", summary.line())
