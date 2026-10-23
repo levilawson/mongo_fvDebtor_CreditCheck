@@ -678,3 +678,9 @@ def test_cli_runs_history_export_backup(tmp_path, monkeypatch, capsys):
     restored = Store(bk)
     assert restored.get("1892|2026-09-08")["status"] == "accepted"
     restored.close()
+
+
+def test_z_prefix_variants_all_excluded():
+    from fvdebtor_creditcheck.events import is_excluded_client as ex
+    assert all(ex(n) for n in ["Z - Old", "Z- Old", "Z-Old", " z -Old", "z-"])
+    assert not any(ex(n) for n in ["Zephyr", "Z Energy", "Zeta-Co", "Testa"])
