@@ -48,8 +48,8 @@ narrow the first rollout (applied before dedup and before `--limit`, so the limi
   **skipped** (counted as `skipped_inactive`), not sent to the inactive webhook, and nothing is recorded for them,
   so widening or removing the flags later picks them up automatically.
 ```powershell
-& $PY -m fvdebtor_creditcheck run --expired-within-days 90 --purchased-within-days 30            # dry-run
-& $PY -m fvdebtor_creditcheck run --expired-within-days 90 --purchased-within-days 30 --limit 1 --send
+& $PY -m fvdebtor_creditcheck run --expired-within-days 90 --purchased-within-days 90            # dry-run
+& $PY -m fvdebtor_creditcheck run --expired-within-days 90 --purchased-within-days 90 --limit 1 --send
 ```
 Without these flags the full routing above applies (inactive debtors go to the second webhook).
 
