@@ -102,7 +102,7 @@ def test_payload_shape_and_string_preservation():
     assert p["event_id"] == make_event_id("1888", "2026-09-16")
     assert set(p) == {"schema_version", "event_type", "event_id", "detected_at", "debtor_id", "debtor_name",
                       "credit_score", "credit_report_date", "credit_average_days", "credit_report_expired", "is_active", "credit_report_expires_on",
-                      "restricted", "mongo_updated_at", "client_count", "clients", "rep_groups"}
+                      "restricted", "mongo_updated_at", "client_count", "clients", "rep_groups", "payload_json"}
 
 
 # ---- dry run / send / dedup / limit ----
@@ -702,3 +702,11 @@ def test_client_label_on_same_line_and_lines_per_rep():
     two = build_rep_groups([{"client_id": "1", "client_name": "A", "client_label": "A (FV ID: 1)", "account_rep": "X"},
                             {"client_id": "2", "client_name": "B", "client_label": "B (FV ID: 2)", "account_rep": "X"}])
     assert two[0]["clients_lines"] == "A (FV ID: 1)\nB (FV ID: 2)"
+
+
+def test_payload_json_is_the_whole_event_as_one_string():
+    p = collect_candidates([doc("1892", client="2565")]).candidates[0].build_payload("t", COMPANIES)
+    inner = json.loads(p["payload_json"])
+    assert "payload_json" not in inner and inner["event_id"] == p["event_id"]
+    assert inner["rep_groups"] == p["rep_groups"] and inner["credit_score"] == p["credit_score"]
+    assert inner == {k: v for k, v in p.items() if k != "payload_json"}

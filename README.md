@@ -72,6 +72,12 @@ Back up regularly (the backup command is safe while the job is idle) and keep co
 record of what was sent, and losing it would let the job resend. Exports contain debtor/client/rep names; `*.csv` and
 `state/` are git-ignored.
 
+## Rerunning one event from Zapier (no inbound endpoint)
+Every payload carries `event_id` and `payload_json` (the complete event as one JSON string). When a debtor has no
+CreditSafe ID, the Zap saves `event_id`, `debtor_id` and `payload_json` in a "pending reruns" Zapier Table. A rerun button
+(Zapier Interface/Table) starts a second Zap with that `event_id`; it loads the saved row, checks the mapping row now
+exists, and continues from the CreditSafe step using the stored payload. Nothing on this PC is exposed.
+
 ## Delivery semantics (read this)
 * **At least once, not exactly once.** "Accepted" means Zapier returned 2xx (handed to Zapier), not that a
   credit refresh happened. An HTTP timeout can occur *after* Zapier accepted the event; the event is then

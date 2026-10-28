@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -179,6 +180,8 @@ class Candidate:
         if not self.is_active:
             payload["inactive_reason"] = f"no invoices purchased in {window_days} days or more"
             payload["inactivity_window_days"] = window_days
+        # The whole event as one string, so a Zap can store it in a single field and replay from it later.
+        payload["payload_json"] = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         return payload
 
 
