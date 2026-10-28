@@ -1,0 +1,8 @@
+# EXAMPLE ONLY. Merge the new ingress rule into your EXISTING tunnel config (keep your oi-vm rules), above the
+# final catch-all. Replace the hostname with one on your Cloudflare domain.
+ingress:
+  # ... your existing rules ...
+  - hostname: fv-replay.example.com
+    path: ^/(replay|health)$
+    service: http://127.0.0.1:8787
+  - service: http_status:404

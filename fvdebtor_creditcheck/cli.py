@@ -71,6 +71,9 @@ def parser() -> argparse.ArgumentParser:
     ex.add_argument("--out", help="CSV path (default: state/export_<UTC date>.csv)")
     bk = sub.add_parser("backup", help="consistent copy of the SQLite database")
     bk.add_argument("--out", help="path (default: state/backup_<UTC timestamp>.sqlite3)")
+    sv = sub.add_parser("serve", help="run the authenticated replay endpoint (put it behind your Cloudflare tunnel)")
+    sv.add_argument("--host", default="127.0.0.1", help="loopback only")
+    sv.add_argument("--port", type=int, help="default REPLAY_API_PORT (8787)")
     sub.add_parser("reconcile", help="record new scores for accepted events once Mongo shows a newer credit report")
     rp = sub.add_parser("replay", help="resend a stored event with the same event_id")
     rp.add_argument("event_id", nargs="?", help="event to replay (or use --debtor-id for that debtor's latest event)")
@@ -83,12 +86,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def _exclude_re(cfg: Config):
-    if not cfg.client_exclude_regex:
-        return None
-    try:
-        return re.compile(cfg.client_exclude_regex, re.IGNORECASE)
-    except re.error:
-        raise ConfigError("CLIENT_EXCLUDE_REGEX is not a valid regular expression") from None
+    return cfg.exclude_pattern()
 
 
 def _summary_dict(summary) -> dict:
@@ -250,6 +248,23 @@ def cmd_backup(cfg: Config, args) -> int:
     return 0
 
 
+def cmd_serve(cfg: Config, args) -> int:
+    from .server import create_server
+    try:
+        httpd = create_server(cfg, args.host, args.port)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    log.info("replay endpoint listening on %s:%s (POST /replay, GET /health)", *httpd.server_address[:2])
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        log.info("replay endpoint stopped")
+    finally:
+        httpd.server_close()
+    return 0
+
+
 def cmd_reconcile(cfg: Config, args) -> int:
     ratings = lambda ids: fetch_current_ratings(cfg.require_mongo(), ids)  # noqa: E731
     with single_instance(cfg.lock_path):
@@ -329,7 +344,7 @@ def main(argv=None) -> int:
         setup_logging(cfg)
         return {"run": cmd_run, "status": cmd_status, "replay": cmd_replay,
                 "reconcile": cmd_reconcile, "history": cmd_history, "runs": cmd_runs,
-                "export": cmd_export, "backup": cmd_backup}[args.cmd](cfg, args)
+                "export": cmd_export, "backup": cmd_backup, "serve": cmd_serve}[args.cmd](cfg, args)
     except ConfigError as exc:
         print(f"configuration error: {exc}", file=sys.stderr)
         return 2

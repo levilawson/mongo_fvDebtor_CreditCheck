@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -19,9 +20,10 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class Config:
-    mongo_uri: str | None
-    webhook_url: str | None
-    inactive_webhook_url: str | None
+    # Secrets are kept out of repr() so they can't leak into logs or tracebacks.
+    mongo_uri: str | None = field(repr=False)
+    webhook_url: str | None = field(repr=False)
+    inactive_webhook_url: str | None = field(repr=False)
     state_db_path: Path
     lock_path: Path
     log_dir: Path
@@ -35,6 +37,9 @@ class Config:
     reconcile_stale_days: int = 3
     report_validity_days: int = 30
     client_exclude_regex: str | None = None
+    replay_api_token: str | None = field(default=None, repr=False)
+    replay_api_port: int = 8787
+    replay_cooldown_seconds: int = 300
 
     def require_mongo(self) -> str:
         if not self.mongo_uri:
@@ -46,6 +51,19 @@ class Config:
 
     def require_inactive_webhook(self) -> str:
         return self._https("ZAPIER_INACTIVE_WEBHOOK_URL", self.inactive_webhook_url)
+
+    def exclude_pattern(self):
+        if not self.client_exclude_regex:
+            return None
+        try:
+            return re.compile(self.client_exclude_regex, re.IGNORECASE)
+        except re.error:
+            raise ConfigError("CLIENT_EXCLUDE_REGEX is not a valid regular expression") from None
+
+    def require_replay_token(self) -> str:
+        if not self.replay_api_token or len(self.replay_api_token) < 32:
+            raise ConfigError("REPLAY_API_TOKEN must be set to a random value of at least 32 characters")
+        return self.replay_api_token
 
     @staticmethod
     def _https(name: str, url: str | None) -> str:
@@ -81,6 +99,9 @@ def load_config() -> Config:
             reconcile_stale_days=int(os.environ.get("RECONCILE_STALE_DAYS", 3)),
             report_validity_days=int(os.environ.get("REPORT_VALIDITY_DAYS", 30)),
             client_exclude_regex=os.environ.get("CLIENT_EXCLUDE_REGEX") or None,
+            replay_api_token=os.environ.get("REPLAY_API_TOKEN") or None,
+            replay_api_port=int(os.environ.get("REPLAY_API_PORT", 8787)),
+            replay_cooldown_seconds=int(os.environ.get("REPLAY_COOLDOWN_SECONDS", 300)),
         )
     except ValueError as exc:
         raise ConfigError(f"invalid numeric setting: {exc}") from None

@@ -78,6 +78,32 @@ CreditSafe ID, the Zap saves `event_id`, `debtor_id` and `payload_json` in a "pe
 (Zapier Interface/Table) starts a second Zap with that `event_id`; it loads the saved row, checks the mapping row now
 exists, and continues from the CreditSafe step using the stored payload. Nothing on this PC is exposed.
 
+## Rerun one event from a Zap (`serve`, behind your Cloudflare tunnel)
+`serve` is a small authenticated HTTP endpoint on this PC. A Zap (for example a "Resend" button after a CreditSafe ID is
+added) calls it with an `event_id`; the job rebuilds that event from current Mongo data (same `event_id` and
+`detected_at`; falls back to the stored payload if Mongo no longer matches) and posts it to the Zapier hook again.
+* `POST /replay`, header `Authorization: Bearer <REPLAY_API_TOKEN>`, body `{"event_id": "fvcr-...", "refresh": true}`.
+  Responses: 200 `accepted` (or 502 `failed`), 400 bad id, 401 bad token, 404 unknown event, 409 another run in
+  progress, 429 same event was attempted within `REPLAY_COOLDOWN_SECONDS` (default 300; stops double clicks).
+  `GET /health` returns `{"ok": true}` without auth.
+* It binds to loopback only; set `REPLAY_API_TOKEN` (32+ random chars) in `.env`; the token and URLs are never logged.
+* Zapier's webhook step times out after about 30 seconds; a replay normally takes a few seconds (one Mongo read plus one
+  POST), but a failing destination with retries can take longer. Treat a timeout as unknown and check `history`.
+Setup on this PC:
+```powershell
+& $PY -c "import secrets; print(secrets.token_urlsafe(48))"      # put the output in .env as REPLAY_API_TOKEN
+& $PY -m fvdebtor_creditcheck serve                                # test locally, Ctrl+C to stop
+curl http://127.0.0.1:8787/health
+```
+Tunnel: add an ingress rule to your existing tunnel config pointing a hostname at `http://127.0.0.1:8787` (example in
+`deploy/cloudflared-ingress.example.yml`), then `cloudflared tunnel route dns <tunnel> <hostname>` and restart
+cloudflared. Strongly recommended: put Cloudflare Access (a service-token policy) in front of that hostname and have the
+Zap send the `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers as well as the bearer token.
+Zap step: Webhooks by Zapier, Custom Request, POST `https://<hostname>/replay`, headers `Authorization: Bearer <token>`
+and `Content-Type: application/json`, body `{"event_id": "<event_id>"}`.
+To keep it running, `deploy\windows_serve_task.ps1` registers a start-at-boot task (disabled; enable after testing).
+Because the Zap has no `event_id` check, the Zap itself must still stop a second press (for example a "Needs Rerun" flag).
+
 ## Delivery semantics (read this)
 * **At least once, not exactly once.** "Accepted" means Zapier returned 2xx (handed to Zapier), not that a
   credit refresh happened. An HTTP timeout can occur *after* Zapier accepted the event; the event is then
