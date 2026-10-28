@@ -101,7 +101,13 @@ cloudflared. Strongly recommended: put Cloudflare Access (a service-token policy
 Zap send the `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers as well as the bearer token.
 Zap step: Webhooks by Zapier, Custom Request, POST `https://<hostname>/replay`, headers `Authorization: Bearer <token>`
 and `Content-Type: application/json`, body `{"event_id": "<event_id>"}`.
-To keep it running, `deploy\windows_serve_task.ps1` registers a start-at-logon task (disabled; enable and start it after testing).
+To keep it running, the **FV Replay Watchdog** scheduled task (`deploy\\windows_watchdog_task.ps1`) runs `deploy\\watchdog.ps1`
+at startup and every 5 minutes. The script checks `http://127.0.0.1:8787/health` (two looks, 5 seconds apart); if it is
+down it stops stale `serve` processes, frees the port (python processes only), starts `serve` hidden with output in
+`logs\\serve.out.log` / `logs\\serve.err.log`, and logs each restart to `logs\\watchdog.log`. If local health is fine but the
+public URL fails it only logs a warning: the tunnel belongs to the OI watchdog and this project never starts or stops
+cloudflared. The watchdog is the only thing that should start `serve` (the older FvDebtorReplayApi task is disabled).
+`serve` is threaded, so `/health` still answers during a slow replay.
 Because the Zap has no `event_id` check, the Zap itself must still stop a second press (for example a "Needs Rerun" flag).
 
 ## Delivery semantics (read this)

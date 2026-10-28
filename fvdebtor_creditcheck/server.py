@@ -14,7 +14,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 
 from . import mongo_source
@@ -149,5 +149,7 @@ def create_server(cfg: Config, host: str = "127.0.0.1", port: int | None = None,
     if host not in LOOPBACK:
         raise ValueError("the replay server only binds to loopback; expose it through the tunnel")
     token = cfg.require_replay_token()
-    return HTTPServer((host, cfg.replay_api_port if port is None else port),
+    # Threaded so /health keeps answering during a slow replay (a watchdog polls it); replays themselves are
+    # serialised by the job lock, so a second concurrent replay gets a 409.
+    return ThreadingHTTPServer((host, cfg.replay_api_port if port is None else port),
                       make_handler(cfg, deps or default_deps(cfg), token))

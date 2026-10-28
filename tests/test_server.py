@@ -128,3 +128,34 @@ def test_http_endpoint_auth_routing_and_replay(tmp_path):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_health_answers_while_a_replay_is_in_progress(tmp_path):
+    cfg = make_cfg(tmp_path)
+    seed(cfg)
+    started, release = threading.Event(), threading.Event()
+
+    class SlowSession(FakeSession):
+        def post(self, url, **kw):
+            started.set()
+            release.wait(10)
+            return super().post(url, **kw)
+
+    sess = SlowSession(Resp(200))
+    httpd = server.create_server(cfg, port=0, deps=make_deps(sess))
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    result = {}
+    try:
+        replay = threading.Thread(target=lambda: result.update(r=_call(port, body={"event_id": EID})))
+        replay.start()
+        assert started.wait(10)
+        assert _call(port, "GET", "/health", token=None) == (200, {"ok": True})      # not blocked by the replay
+        assert _call(port, body={"event_id": EID})[0] == 409                           # overlap refused
+        release.set()
+        replay.join(10)
+        assert result["r"][0] == 200
+    finally:
+        release.set()
+        httpd.shutdown()
+        httpd.server_close()
