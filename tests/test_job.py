@@ -710,3 +710,60 @@ def test_payload_json_is_the_whole_event_as_one_string():
     assert "payload_json" not in inner and inner["event_id"] == p["event_id"]
     assert inner["rep_groups"] == p["rep_groups"] and inner["credit_score"] == p["credit_score"]
     assert inner == {k: v for k, v in p.items() if k != "payload_json"}
+
+
+# ---- refreshed replay ----
+def test_refreshed_replay_rebuilds_clients_keeps_event_id_and_detected_at(store):
+    sess = FakeSession(Resp(200))
+    runner.run_job([doc("1380", client="1085")], store, client(sess), True, None)  # sent with no rep data
+    old = sess.calls[0][1]["json"]
+    assert old["clients"][0]["account_rep"] is None
+    row = store.get_by_event_id(old["event_id"])
+    companies = {"1085": {"name": "CD Fuels LLC", "accountRep": "Emily Philyaw"},
+                 "1404": {"name": "Other Co", "accountRep": "Emily Philyaw"},
+                 "1500": {"name": "Test Company", "accountRep": None}}
+    new = runner.rebuild_event_payload(row, [doc("1380", client="1085")], lambda ids: companies,
+                                       lambda ids: {"1380": {"1085", "1404", "1500"}})
+    assert new["event_id"] == old["event_id"] and new["detected_at"] == old["detected_at"]
+    assert [g["account_rep"] for g in new["rep_groups"]] == ["Emily Philyaw"]
+    assert new["rep_groups"][0]["clients_text"] == "CD Fuels LLC (FV ID: 1085) and Other Co (FV ID: 1404)"
+    runner.replay_event(store, client(sess), old["event_id"], new)
+    assert sess.calls[1][1]["json"]["rep_groups"][0]["client_count"] == 2
+    assert json.loads(store.get_by_event_id(old["event_id"])["payload_json"])["client_count"] == 2
+    assert store.get_by_event_id(old["event_id"])["status"] == "accepted"
+
+
+def test_refresh_fails_cleanly_when_debtor_no_longer_expired_with_same_date(store):
+    runner.run_job([doc("1380", "2026-09-09")], store, client(FakeSession(Resp(200))), True, None)
+    row = store.get_by_event_id(make_event_id("1380", "2026-09-09"))
+    with pytest.raises(LookupError):
+        runner.rebuild_event_payload(row, [doc("1380", "2026-10-20")])
+    with pytest.raises(LookupError):
+        runner.rebuild_event_payload(row, [])
+
+
+def test_refreshed_inactive_event_stays_on_inactive_route(store):
+    runner.run_job([doc("1380")], store, client(FakeSession(Resp(200))), True, None, active_lookup=lambda: {"x"})
+    row = store.get_by_event_id(make_event_id("1380", "2026-09-16", False))
+    new = runner.rebuild_event_payload(row, [doc("1380")])
+    assert new["is_active"] is False and new["event_id"] == row["event_id"]
+
+
+def test_cli_replay_by_debtor_with_refresh(tmp_path, monkeypatch, capsys):
+    from fvdebtor_creditcheck import cli
+    _env(monkeypatch, tmp_path)
+    st = Store(tmp_path / "s.sqlite3")
+    runner.run_job([doc("1380", client="2565")], st, client(FakeSession(Resp(200))), True, None)
+    st.close()
+    monkeypatch.setattr(cli, "fetch_expired", lambda uri: [doc("1380", client="2565")])
+    monkeypatch.setattr(cli, "fetch_companies", lambda uri, ids: COMPANIES)
+    monkeypatch.setattr(cli, "fetch_debtor_clients", lambda uri, ids: {"1380": {"2565", "1479"}})
+    sess = FakeSession(Resp(200))
+    monkeypatch.setattr(cli, "build_client", lambda cfg: client(sess))
+    assert cli.main(["replay", "--debtor-id", "1380", "--refresh", "--show-payload"]) == 0
+    out = capsys.readouterr().out
+    assert "refreshed from Mongo" in out and "Christine Dunn" in out and not sess.calls
+    assert cli.main(["replay", "--debtor-id", "1380", "--refresh", "--send"]) == 0
+    assert len(sess.calls) == 1 and sess.calls[0][1]["json"]["client_count"] == 2
+    assert cli.main(["replay", "--debtor-id", "9999"]) == 2
+    assert cli.main(["replay"]) == 2

@@ -16,7 +16,8 @@ from .config import Config, ConfigError, load_config
 from .events import utc_iso
 from .mongo_source import (MongoReadError, SuspiciousActivityData, fetch_active_debtors, fetch_companies,
                            fetch_current_ratings, fetch_debtor_clients, fetch_expired)
-from .runner import AlreadyRunning, reconcile, replay_event, run_job, single_instance
+from .runner import (AlreadyRunning, reconcile, rebuild_event_payload, replay_event, run_job,
+                     single_instance)
 from .store import Store
 from .webhook import RoutedWebhook, WebhookClient
 
@@ -72,7 +73,11 @@ def parser() -> argparse.ArgumentParser:
     bk.add_argument("--out", help="path (default: state/backup_<UTC timestamp>.sqlite3)")
     sub.add_parser("reconcile", help="record new scores for accepted events once Mongo shows a newer credit report")
     rp = sub.add_parser("replay", help="resend a stored event with the same event_id")
-    rp.add_argument("event_id")
+    rp.add_argument("event_id", nargs="?", help="event to replay (or use --debtor-id for that debtor's latest event)")
+    rp.add_argument("--debtor-id", help="replay this debtor's latest stored event")
+    rp.add_argument("--refresh", action="store_true",
+                    help="rebuild the payload from current Mongo data first (same event_id and detected_at)")
+    rp.add_argument("--show-payload", action="store_true", help="dry-run only: print the refreshed payload")
     rp.add_argument("--send", action="store_true", help="actually POST (default: show what would be sent)")
     return p
 
@@ -260,24 +265,53 @@ def cmd_reconcile(cfg: Config, args) -> int:
     return 0
 
 
-def cmd_replay(cfg: Config, args) -> int:
-    if not args.send:
-        store = Store(cfg.state_db_path, readonly=True)
-        row = store.get_by_event_id(args.event_id)
+def _replay_target(cfg: Config, args):
+    """Resolve the stored event to replay (by event ID, or the debtor's latest event)."""
+    store = Store(cfg.state_db_path, readonly=True)
+    try:
+        if args.debtor_id:
+            return store.latest_event_for_debtor(args.debtor_id)
+        return store.get_by_event_id(args.event_id) if args.event_id else None
+    finally:
         store.close()
-        if row is None:
-            print("unknown event_id", file=sys.stderr)
+
+
+def cmd_replay(cfg: Config, args) -> int:
+    if not args.event_id and not args.debtor_id:
+        print("give an event_id or --debtor-id", file=sys.stderr)
+        return 2
+    row = _replay_target(cfg, args)
+    if row is None:
+        print("no stored event found (for a debtor that was never sent, use: run --debtor-id <id> --send)",
+              file=sys.stderr)
+        return 2
+    event_id = row["event_id"]
+    payload = None
+    if args.refresh:
+        try:
+            payload = rebuild_event_payload(
+                row, fetch_expired(cfg.require_mongo()),
+                lambda ids: fetch_companies(cfg.require_mongo(), ids),
+                lambda ids: fetch_debtor_clients(cfg.require_mongo(), ids),
+                cfg.activity_window_days, cfg.report_validity_days, _exclude_re(cfg))
+        except LookupError:
+            print("Mongo no longer shows this debtor/report date as expired, so it can't be refreshed. "
+                  "Replay without --refresh, or use `run`.", file=sys.stderr)
             return 2
-        print(f"[dry-run] would replay event_id={row['event_id']} debtor={row['debtor_id']} "
-              f"report_date={row['report_date']} status={row['status']}; add --send to transmit")
+    if not args.send:
+        print(f"[dry-run] would replay event_id={event_id} debtor={row['debtor_id']} "
+              f"report_date={row['report_date']} status={row['status']}"
+              f"{' (refreshed from Mongo)' if args.refresh else ' (stored payload)'}; add --send to transmit")
+        if payload is not None and args.show_payload:
+            print(json.dumps(payload, indent=2))
         return 0
     cfg.require_webhook()
     cfg.require_inactive_webhook()
     with single_instance(cfg.lock_path):
         store = Store(cfg.state_db_path)
-        store.start_run("replay --send", {"event_id": args.event_id})
+        store.start_run("replay --send", {"event_id": event_id, "refresh": bool(args.refresh)})
         try:
-            summary = replay_event(store, build_client(cfg), args.event_id)
+            summary = replay_event(store, build_client(cfg), event_id, payload)
             store.finish_run(_summary_dict(summary), summary.aborted)
         except KeyError:
             print("unknown event_id", file=sys.stderr)

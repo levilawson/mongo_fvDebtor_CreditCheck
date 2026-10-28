@@ -115,6 +115,8 @@ $PY = ".\.venv\Scripts\python.exe"
 & $PY -m fvdebtor_creditcheck status [--status failed|pending|accepted] [--limit N]
 & $PY -m fvdebtor_creditcheck replay <event_id>          # shows what would be replayed
 & $PY -m fvdebtor_creditcheck replay <event_id> --send   # resend same payload and event_id
+& $PY -m fvdebtor_creditcheck replay --debtor-id 1380 --refresh --show-payload   # dry-run: rebuild from current Mongo data
+& $PY -m fvdebtor_creditcheck replay --debtor-id 1380 --refresh --send           # resend a refreshed payload, same event_id
 ```
 `--limit` applies after removing already-accepted events, so sent rows cannot starve the backlog.
 Run summary: `matched, duplicate, already_sent, eligible, selected, accepted, failed, invalid`.

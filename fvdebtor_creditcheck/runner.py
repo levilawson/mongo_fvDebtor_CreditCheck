@@ -217,11 +217,37 @@ def reconcile(store: Store, ratings_lookup, stale_days: int = 3, now: datetime |
     return summary
 
 
-def replay_event(store: Store, client, event_id: str) -> Summary:
+def rebuild_event_payload(row, docs, company_lookup=None, debtor_clients_lookup=None, window_days: int = 180,
+                          validity_days: int = 30, exclude_regex=None) -> dict:
+    """Fresh payload for an existing event: current Mongo clients/reps/names, same event_id and detected_at.
+
+    Raises LookupError if Mongo no longer has this debtor/report date as an expired record (use `run` instead).
+    """
+    from .events import INACTIVE_SUFFIX
+    base_key = row["event_key"].removesuffix(INACTIVE_SUFFIX)
+    stored = json.loads(row["payload_json"])
+    cand = next((c for c in collect_candidates(docs).candidates if c.event_key == base_key), None)
+    if cand is None:
+        raise LookupError(base_key)
+    cand.is_active = stored.get("is_active") is not False
+    if debtor_clients_lookup:
+        cand.client_ids |= debtor_clients_lookup({cand.debtor_id}).get(cand.debtor_id, set())
+    companies = company_lookup(set(cand.client_ids)) if company_lookup and cand.client_ids else {}
+    cand.client_ids -= {c for c in cand.client_ids
+                        if is_excluded_client((companies.get(c) or {}).get("name"), exclude_regex)}
+    payload = cand.build_payload(stored["detected_at"], companies, window_days, validity_days)
+    assert payload["event_id"] == row["event_id"]
+    return payload
+
+
+def replay_event(store: Store, client, event_id: str, payload: dict | None = None) -> Summary:
     row = store.get_by_event_id(event_id)
     summary = Summary(dry_run=False)
     if row is None:
         raise KeyError(event_id)
+    if payload is not None:
+        store.overwrite_payload(row["event_key"], payload)
+        row = store.get_by_event_id(event_id)
     res = _deliver(store, client, row, summary)
     if res.outcome == webhook.CONFIG_ERROR:
         summary.aborted = f"destination configuration error (HTTP {res.http_status})"

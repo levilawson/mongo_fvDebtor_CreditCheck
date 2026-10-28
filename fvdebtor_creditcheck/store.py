@@ -194,6 +194,16 @@ class Store:
             f"SELECT * FROM events WHERE status='accepted'{cond} ORDER BY accepted_at").fetchall()
         return [r for r in rows if json.loads(r["payload_json"]).get("is_active") is not False]
 
+    def overwrite_payload(self, event_key: str, payload: dict):
+        """Replace a stored payload (also for accepted events), e.g. for an explicit refreshed replay."""
+        self.conn.execute("UPDATE events SET payload_json=? WHERE event_key=?",
+                          (json.dumps(payload, sort_keys=True), event_key))
+        self.conn.commit()
+
+    def latest_event_for_debtor(self, debtor_id: str):
+        return self.conn.execute("SELECT * FROM events WHERE debtor_id=? ORDER BY first_seen_at DESC LIMIT 1",
+                                 (debtor_id,)).fetchone()
+
     def mark_resolved(self, event_key: str, new_score, new_report_date: str):
         self.conn.execute("UPDATE events SET resolved_at=?, new_score=?, new_report_date=? WHERE event_key=?",
                           (utc_iso(), new_score, new_report_date, event_key))
