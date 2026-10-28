@@ -72,13 +72,9 @@ Back up regularly (the backup command is safe while the job is idle) and keep co
 record of what was sent, and losing it would let the job resend. Exports contain debtor/client/rep names; `*.csv` and
 `state/` are git-ignored.
 
-## Rerunning one event from Zapier (no inbound endpoint)
-Every payload carries `event_id` and `payload_json` (the complete event as one JSON string). When a debtor has no
-CreditSafe ID, the Zap saves `event_id`, `debtor_id` and `payload_json` in a "pending reruns" Zapier Table. A rerun button
-(Zapier Interface/Table) starts a second Zap with that `event_id`; it loads the saved row, checks the mapping row now
-exists, and continues from the CreditSafe step using the stored payload. Nothing on this PC is exposed.
-
 ## Rerun one event from a Zap (`serve`, behind your Cloudflare tunnel)
+Every event carries `event_id`. When a debtor has no CreditSafe ID, the Zap keeps that `event_id` on the debtor's row; once the ID
+is added, a Resend button posts the `event_id` to the endpoint below, which rebuilds the event and resends it.
 `serve` is a small authenticated HTTP endpoint on this PC. A Zap (for example a "Resend" button after a CreditSafe ID is
 added) calls it with an `event_id`; the job rebuilds that event from current Mongo data (same `event_id` and
 `detected_at`; falls back to the stored payload if Mongo no longer matches) and posts it to the Zapier hook again.

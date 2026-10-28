@@ -73,6 +73,7 @@ class Summary:
 
 def _deliver(store: Store, client, row, summary: Summary) -> webhook.Result:
     payload = json.loads(row["payload_json"])
+    payload.pop("payload_json", None)  # legacy field from older stored events; Zaps use event_id now
     res = client.send(payload)
     ok = res.outcome == webhook.ACCEPTED
     store.record_attempt(row["event_key"], ok, res.http_status, res.error, res.attempts)
