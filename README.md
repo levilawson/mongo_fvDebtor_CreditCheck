@@ -101,7 +101,7 @@ cloudflared. Strongly recommended: put Cloudflare Access (a service-token policy
 Zap send the `CF-Access-Client-Id` / `CF-Access-Client-Secret` headers as well as the bearer token.
 Zap step: Webhooks by Zapier, Custom Request, POST `https://<hostname>/replay`, headers `Authorization: Bearer <token>`
 and `Content-Type: application/json`, body `{"event_id": "<event_id>"}`.
-To keep it running, `deploy\windows_serve_task.ps1` registers a start-at-boot task (disabled; enable after testing).
+To keep it running, `deploy\windows_serve_task.ps1` registers a start-at-logon task (disabled; enable and start it after testing).
 Because the Zap has no `event_id` check, the Zap itself must still stop a second press (for example a "Needs Rerun" flag).
 
 ## Delivery semantics (read this)

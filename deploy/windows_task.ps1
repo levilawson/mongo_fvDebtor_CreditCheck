@@ -6,4 +6,6 @@ $action = New-ScheduledTaskAction -Execute "$root\.venv\Scripts\python.exe" `
   -Argument "-m fvdebtor_creditcheck run --send --expired-within-days 90 --purchased-within-days 180" -WorkingDirectory $root
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At 7:00AM
 $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 1)
-Register-ScheduledTask -TaskName FvDebtorCreditCheck -Action $action -Trigger $trigger -Settings $settings -Disable
+Register-ScheduledTask -TaskName FvDebtorCreditCheck -Action $action -Trigger $trigger -Settings $settings | Out-Null
+Disable-ScheduledTask -TaskName FvDebtorCreditCheck | Out-Null
+Get-ScheduledTask -TaskName FvDebtorCreditCheck | Select-Object TaskName, State
