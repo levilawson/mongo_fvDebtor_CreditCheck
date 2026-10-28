@@ -82,7 +82,7 @@ exists, and continues from the CreditSafe step using the stored payload. Nothing
 `serve` is a small authenticated HTTP endpoint on this PC. A Zap (for example a "Resend" button after a CreditSafe ID is
 added) calls it with an `event_id`; the job rebuilds that event from current Mongo data (same `event_id` and
 `detected_at`; falls back to the stored payload if Mongo no longer matches) and posts it to the Zapier hook again.
-* `POST /replay`, header `Authorization: Bearer <REPLAY_API_TOKEN>`, body `{"event_id": "fvcr-...", "refresh": true}`.
+* `POST /replay`, header `Authorization: Bearer <REPLAY_API_TOKEN>` (or `X-Webhook-Secret: <REPLAY_API_TOKEN>`), body `{"event_id": "fvcr-...", "refresh": true}`.
   Responses: 200 `accepted` (or 502 `failed`), 400 bad id, 401 bad token, 404 unknown event, 409 another run in
   progress, 429 same event was attempted within `REPLAY_COOLDOWN_SECONDS` (default 300; stops double clicks).
   `GET /health` returns `{"ok": true}` without auth.

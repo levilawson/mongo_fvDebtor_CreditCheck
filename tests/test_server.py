@@ -89,12 +89,12 @@ def test_token_required_and_loopback_only(tmp_path):
     assert TOKEN not in repr(cfg) and "pw" not in repr(cfg)
 
 
-def _call(port, method="POST", path="/replay", token=TOKEN, body=None, raw=None):
+def _call(port, method="POST", path="/replay", token=TOKEN, body=None, raw=None, header="Authorization"):
     data = raw if raw is not None else (json.dumps(body).encode() if body is not None else b"")
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data if method == "POST" else None,
                                  method=method)
     if token:
-        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header(header, f"Bearer {token}" if header == "Authorization" else token)
     req.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
@@ -115,6 +115,7 @@ def test_http_endpoint_auth_routing_and_replay(tmp_path):
         assert _call(port, "GET", "/health", token=None) == (200, {"ok": True})
         assert _call(port, "GET", "/replay", token=None)[0] == 404
         assert _call(port, token=None, body={"event_id": EID})[0] == 401
+        assert _call(port, token="x" * 40, body={"event_id": EID}, header="X-Webhook-Secret")[0] == 401
         assert _call(port, token="x" * 40, body={"event_id": EID})[0] == 401
         assert _call(port, path="/other", body={"event_id": EID})[0] == 404
         assert _call(port, raw=b"not json")[0] == 400
@@ -122,7 +123,7 @@ def test_http_endpoint_auth_routing_and_replay(tmp_path):
         assert not sess.calls
         status, body = _call(port, body={"event_id": EID})
         assert status == 200 and body["status"] == "accepted" and len(sess.calls) == 1
-        assert _call(port, body={"event_id": EID})[0] == 429  # double click inside the cooldown
+        assert _call(port, body={"event_id": EID}, header="X-Webhook-Secret")[0] == 429  # same secret, other header
         assert len(sess.calls) == 1
     finally:
         httpd.shutdown()

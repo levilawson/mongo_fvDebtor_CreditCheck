@@ -1,7 +1,8 @@
 """Authenticated local HTTP endpoint that replays one stored event by event_id.
 
 Meant to sit behind a Cloudflare tunnel (the tunnel is the only thing reachable from outside; this server binds to
-loopback only). A Zap calls POST /replay with `Authorization: Bearer <REPLAY_API_TOKEN>` and {"event_id": "..."}.
+loopback only). A Zap calls POST /replay with `Authorization: Bearer <REPLAY_API_TOKEN>` (or `X-Webhook-Secret:
+<REPLAY_API_TOKEN>`) and {"event_id": "..."}.
 The event is rebuilt from current Mongo data (same event_id and detected_at) and sent to the Zapier hook again.
 Delivery stays at least once: the Zap must treat a repeated event_id as a rerun on purpose.
 """
@@ -119,9 +120,9 @@ def make_handler(cfg: Config, deps: Deps, token: str):
         def do_POST(self):
             if self.path != "/replay":
                 return self._send(404, {"status": "error", "error": "not found"})
-            supplied = self.headers.get("Authorization", "")
-            if not (supplied.startswith("Bearer ")
-                    and hmac.compare_digest(supplied[7:].strip().encode(), token_b)):
+            auth = self.headers.get("Authorization", "")
+            supplied = auth[7:].strip() if auth.startswith("Bearer ") else self.headers.get("X-Webhook-Secret", "").strip()
+            if not (supplied and hmac.compare_digest(supplied.encode(), token_b)):
                 log.warning("rejected replay request: bad or missing token")
                 return self._send(401, {"status": "error", "error": "unauthorized"})
             try:
