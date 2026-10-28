@@ -143,7 +143,7 @@ class Candidate:
         """Active events keep the plain key; inactive-route events are tracked separately."""
         return self.event_key + ("" if self.is_active else INACTIVE_SUFFIX)
 
-    def build_payload(self, detected_at: str, companies: dict | None = None, window_days: int = 90,
+    def build_payload(self, detected_at: str, companies: dict | None = None, window_days: int = 180,
                       validity_days: int = 30) -> dict:
         companies = companies or {}
         clients = []

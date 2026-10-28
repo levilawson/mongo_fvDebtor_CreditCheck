@@ -19,11 +19,11 @@ never resent, so later rep or client changes are not re-announced.
 
 ## Activity routing (second webhook)
 A debtor is **active** if `fvInvoice` has at least one document with `doc.isPurchase: true` and
-`doc.buyDate >= today - 90 days` (UTC; `ACTIVITY_WINDOW_DAYS` to change; one indexed read-only query).
+`doc.buyDate >= today - 180 days` (UTC; `ACTIVITY_WINDOW_DAYS` to change; one indexed read-only query).
 * Active -> `ZAPIER_WEBHOOK_URL`, `event_type` `factorview.credit_report_expired`, `is_active: true`.
 * Inactive -> `ZAPIER_INACTIVE_WEBHOOK_URL`, `event_type` `factorview.credit_report_expired_inactive`,
   `is_active: false`, plus `inactive_reason` and `inactivity_window_days`. Same client/rep fields. The Zap should skip
-  CreditSafe and message the reps "no invoices purchased in 90 days or more".
+  CreditSafe and message the reps "no invoices purchased in 180 days or more".
 * The route is part of the dedup key: an inactive event has its own `event_id`, so a debtor that later becomes active
   (same report date) still sends one active event. Each route is sent at most once per report date.
 * If the query finds no purchases at all in the window (wrong field/format), the run aborts instead of routing everyone
@@ -52,8 +52,8 @@ narrow the first rollout (applied before dedup and before `--limit`, so the limi
   **skipped** (counted as `skipped_inactive`), not sent to the inactive webhook, and nothing is recorded for them,
   so widening or removing the flags later picks them up automatically.
 ```powershell
-& $PY -m fvdebtor_creditcheck run --expired-within-days 90 --purchased-within-days 90            # dry-run
-& $PY -m fvdebtor_creditcheck run --expired-within-days 90 --purchased-within-days 90 --limit 1 --send
+& $PY -m fvdebtor_creditcheck run --expired-within-days 90 --purchased-within-days 180            # dry-run
+& $PY -m fvdebtor_creditcheck run --expired-within-days 90 --purchased-within-days 180 --limit 1 --send
 ```
 Without these flags the full routing above applies (inactive debtors go to the second webhook).
 

@@ -396,7 +396,7 @@ def test_inactive_debtor_gets_inactive_event_type_flag_and_separate_key(store):
     assert by_debtor["2"]["is_active"] is True and by_debtor["2"]["event_type"] == "factorview.credit_report_expired"
     p = by_debtor["1"]
     assert p["is_active"] is False and p["event_type"] == "factorview.credit_report_expired_inactive"
-    assert "90 days" in p["inactive_reason"] and p["inactivity_window_days"] == 90
+    assert "180 days" in p["inactive_reason"] and p["inactivity_window_days"] == 180
     assert p["event_id"] != make_event_id("1", "2026-09-16")
     assert store.get("1|2026-09-16|inactive")["status"] == "accepted" and store.get("2|2026-09-16")["status"] == "accepted"
 
@@ -575,7 +575,7 @@ def test_expired_within_days_is_report_date_plus_validity(store):
 def test_payload_has_expiry_date_from_validity():
     p = collect_candidates([doc("1", "2026-09-18")]).candidates[0].build_payload("t")
     assert p["credit_report_expires_on"] == "2026-10-18"
-    assert collect_candidates([doc("1", "2026-09-18")]).candidates[0].build_payload("t", None, 90, 45)["credit_report_expires_on"] == "2026-11-02"
+    assert collect_candidates([doc("1", "2026-09-18")]).candidates[0].build_payload("t", None, 180, 45)["credit_report_expires_on"] == "2026-11-02"
 
 
 def test_purchased_within_days_skips_inactive_instead_of_routing(store):

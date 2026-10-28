@@ -31,7 +31,7 @@ class Config:
     backoff_base: float = 2.0
     retry_after_max: float = 60.0
     max_consecutive_failed_events: int = 3
-    activity_window_days: int = 90
+    activity_window_days: int = 180
     reconcile_stale_days: int = 3
     report_validity_days: int = 30
     client_exclude_regex: str | None = None
@@ -77,7 +77,7 @@ def load_config() -> Config:
             backoff_base=float(os.environ.get("WEBHOOK_BACKOFF_BASE_SECONDS", 2)),
             retry_after_max=float(os.environ.get("WEBHOOK_RETRY_AFTER_MAX_SECONDS", 60)),
             max_consecutive_failed_events=int(os.environ.get("MAX_CONSECUTIVE_FAILED_EVENTS", 3)),
-            activity_window_days=int(os.environ.get("ACTIVITY_WINDOW_DAYS", 90)),
+            activity_window_days=int(os.environ.get("ACTIVITY_WINDOW_DAYS", 180)),
             reconcile_stale_days=int(os.environ.get("RECONCILE_STALE_DAYS", 3)),
             report_validity_days=int(os.environ.get("REPORT_VALIDITY_DAYS", 30)),
             client_exclude_regex=os.environ.get("CLIENT_EXCLUDE_REGEX") or None,

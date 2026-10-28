@@ -89,7 +89,7 @@ def _deliver(store: Store, client, row, summary: Summary) -> webhook.Result:
 def run_job(docs, store: Store, client, send: bool, limit: int | None,
             max_consecutive_failed: int = 3, debtor_id: str | None = None,
             company_lookup=None, debtor_clients_lookup=None, active_lookup=None,
-            window_days: int = 90, expired_within_days: int | None = None, skip_inactive: bool = False,
+            window_days: int = 180, expired_within_days: int | None = None, skip_inactive: bool = False,
             today: date | None = None, validity_days: int = 30, exclude_regex=None) -> Summary:
     summary = Summary(dry_run=not send)
     collected = collect_candidates(docs)
