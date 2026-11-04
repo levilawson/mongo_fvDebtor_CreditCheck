@@ -771,3 +771,33 @@ def test_cli_replay_by_debtor_with_refresh(tmp_path, monkeypatch, capsys):
     assert len(sess.calls) == 1 and sess.calls[0][1]["json"]["client_count"] == 2
     assert cli.main(["replay", "--debtor-id", "9999"]) == 2
     assert cli.main(["replay"]) == 2
+
+
+# ---- debtor list ----
+def test_cohort_debtors_lists_id_and_name_with_same_filters_as_run(store):
+    docs = [doc("1034", "2026-09-09"), doc("1041", "2026-09-09"), doc("1041", "2026-08-25"),
+            doc("3", "2020-01-01"), doc("9", "2026-09-09")]
+    docs[0]["doc"]["name"] = "Acadia Equipment Group"
+    runner.run_job([doc("1041", "2026-09-09")], store, client(FakeSession(Resp(200))), True, None)  # already sent
+    rows = runner.cohort_debtors(docs, store, lambda: {"1034", "1041", "3"}, expired_within_days=90,
+                                 skip_inactive=True, today=TODAY)
+    assert [(r["debtor_id"], r["already_sent"]) for r in rows] == [("1034", False), ("1041", True)]
+    assert rows[0]["debtor_name"] == "Acadia Equipment Group" and rows[0]["expires_on"] == "2026-10-09"
+    assert rows[1]["report_date"] == "2026-09-09"  # newest report date per debtor
+
+
+def test_cli_debtors_writes_csv_and_prints_list(tmp_path, monkeypatch, capsys):
+    import csv as _csv
+    from fvdebtor_creditcheck import cli
+    _env(monkeypatch, tmp_path)
+    recent = (datetime.now(timezone.utc).date() - __import__("datetime").timedelta(days=45)).isoformat()
+    monkeypatch.setattr(cli, "fetch_expired", lambda uri: [doc("1034", recent), doc("2", "2020-01-01")])
+    monkeypatch.setattr(cli, "fetch_active_debtors", lambda uri, since: {"1034", "2"})
+    out = tmp_path / "d.csv"
+    assert cli.main(["debtors", "--expired-within-days", "90", "--purchased-within-days", "180", "--out", str(out)]) == 0
+    printed = capsys.readouterr().out
+    assert "1034\tDebtor 1034" in printed and "1 debtor(s)" in printed and "Debtor 2" not in printed
+    rows = list(_csv.reader(open(out, encoding="utf-8-sig")))
+    assert rows[0] == ["Debtor ID", "Debtor Name", "Report Date", "Expires On", "Already Sent", "CreditSafe ID"]
+    assert rows[1][:2] == ["1034", "Debtor 1034"] and rows[1][4:] == ["no", ""]
+    assert cli.main(["debtors", "--expired-within-days", "0"]) == 2

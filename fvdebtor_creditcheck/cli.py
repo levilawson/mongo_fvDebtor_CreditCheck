@@ -16,8 +16,8 @@ from .config import Config, ConfigError, load_config
 from .events import utc_iso
 from .mongo_source import (MongoReadError, SuspiciousActivityData, fetch_active_debtors, fetch_companies,
                            fetch_current_ratings, fetch_debtor_clients, fetch_expired)
-from .runner import (AlreadyRunning, reconcile, rebuild_event_payload, replay_event, run_job,
-                     single_instance)
+from .runner import (AlreadyRunning, cohort_debtors, reconcile, rebuild_event_payload, replay_event,
+                     run_job, single_instance)
 from .store import Store
 from .webhook import RoutedWebhook, WebhookClient
 
@@ -71,6 +71,10 @@ def parser() -> argparse.ArgumentParser:
     ex.add_argument("--out", help="CSV path (default: state/export_<UTC date>.csv)")
     bk = sub.add_parser("backup", help="consistent copy of the SQLite database")
     bk.add_argument("--out", help="path (default: state/backup_<UTC timestamp>.sqlite3)")
+    dl = sub.add_parser("debtors", help="list debtor ID and name for the debtors a `run` with the same filters would cover")
+    dl.add_argument("--expired-within-days", type=int, metavar="N")
+    dl.add_argument("--purchased-within-days", type=int, metavar="N")
+    dl.add_argument("--out", help="CSV path (default: state/debtors_<UTC date>.csv)")
     sv = sub.add_parser("serve", help="run the authenticated replay endpoint (put it behind your Cloudflare tunnel)")
     sv.add_argument("--host", default="127.0.0.1", help="loopback only")
     sv.add_argument("--port", type=int, help="default REPLAY_API_PORT (8787)")
@@ -248,6 +252,35 @@ def cmd_backup(cfg: Config, args) -> int:
     return 0
 
 
+def cmd_debtors(cfg: Config, args) -> int:
+    for name in ("expired_within_days", "purchased_within_days"):
+        v = getattr(args, name)
+        if v is not None and v < 1:
+            print(f"--{name.replace('_', '-')} must be >= 1", file=sys.stderr)
+            return 2
+    docs = fetch_expired(cfg.require_mongo())
+    window = args.purchased_within_days or cfg.activity_window_days
+    since = (datetime.now(timezone.utc).date() - timedelta(days=window)).isoformat()
+    store = Store(cfg.state_db_path, readonly=True)
+    try:
+        rows = cohort_debtors(docs, store, lambda: fetch_active_debtors(cfg.require_mongo(), since),
+                              args.expired_within_days, bool(args.purchased_within_days), cfg.report_validity_days)
+    finally:
+        store.close()
+    out = Path(args.out) if args.out else cfg.state_db_path.parent / f"debtors_{utc_iso()[:10]}.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", newline="", encoding="utf-8-sig") as fh:  # BOM so Excel reads UTF-8 names correctly
+        w = csv.writer(fh)
+        w.writerow(["Debtor ID", "Debtor Name", "Report Date", "Expires On", "Already Sent", "CreditSafe ID"])
+        for r in rows:
+            w.writerow([r["debtor_id"], r["debtor_name"], r["report_date"], r["expires_on"],
+                        "yes" if r["already_sent"] else "no", ""])
+    for r in rows:
+        print(f"{r['debtor_id']}\t{r['debtor_name']}")
+    print(f"{len(rows)} debtor(s); CSV written to {out}")
+    return 0
+
+
 def cmd_serve(cfg: Config, args) -> int:
     from .server import create_server
     try:
@@ -344,7 +377,7 @@ def main(argv=None) -> int:
         setup_logging(cfg)
         return {"run": cmd_run, "status": cmd_status, "replay": cmd_replay,
                 "reconcile": cmd_reconcile, "history": cmd_history, "runs": cmd_runs,
-                "export": cmd_export, "backup": cmd_backup, "serve": cmd_serve}[args.cmd](cfg, args)
+                "export": cmd_export, "backup": cmd_backup, "serve": cmd_serve, "debtors": cmd_debtors}[args.cmd](cfg, args)
     except ConfigError as exc:
         print(f"configuration error: {exc}", file=sys.stderr)
         return 2

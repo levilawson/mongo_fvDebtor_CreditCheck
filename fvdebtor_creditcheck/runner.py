@@ -241,6 +241,35 @@ def rebuild_event_payload(row, docs, company_lookup=None, debtor_clients_lookup=
     return payload
 
 
+def cohort_debtors(docs, store: Store, active_lookup=None, expired_within_days: int | None = None,
+                   skip_inactive: bool = False, validity_days: int = 30, today: date | None = None) -> list[dict]:
+    """One row per debtor (newest report date) that the current run filters would include, sent or not.
+
+    Same filters as `run`, but nothing is sent or written. Rows: debtor_id, debtor_name, report_date,
+    expires_on, already_sent.
+    """
+    today = today or datetime.now(timezone.utc).date()
+    collected = collect_candidates(docs)
+    active = active_lookup() if active_lookup else None
+    best: dict[str, dict] = {}
+    for cand in collected.candidates:
+        if active is not None:
+            cand.is_active = cand.debtor_id in active
+        expires = date.fromisoformat(cand.report_date) + timedelta(days=validity_days)
+        if expired_within_days is not None and not (today - timedelta(days=expired_within_days) <= expires <= today):
+            continue
+        if skip_inactive and not cand.is_active:
+            continue
+        row = store.get(cand.store_key())
+        name = (cand.doc.get("doc") or {}).get("name")
+        entry = {"debtor_id": cand.debtor_id, "debtor_name": name if isinstance(name, str) else "",
+                 "report_date": cand.report_date, "expires_on": expires.isoformat(),
+                 "already_sent": bool(row is not None and row["status"] == "accepted")}
+        if cand.debtor_id not in best or entry["report_date"] > best[cand.debtor_id]["report_date"]:
+            best[cand.debtor_id] = entry
+    return sorted(best.values(), key=lambda r: (len(r["debtor_id"]), r["debtor_id"]))
+
+
 def replay_event(store: Store, client, event_id: str, payload: dict | None = None) -> Summary:
     row = store.get_by_event_id(event_id)
     summary = Summary(dry_run=False)

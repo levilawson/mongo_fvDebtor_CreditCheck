@@ -106,6 +106,13 @@ cloudflared. The watchdog is the only thing that should start `serve` (the older
 `serve` is threaded, so `/health` still answers during a slow replay.
 Because the Zap has no `event_id` check, the Zap itself must still stop a second press (for example a "Needs Rerun" flag).
 
+## List debtors to prepare (before go-live)
+`debtors` lists the debtors a `run` with the same filters would cover (sent or not), one row per debtor, and writes a CSV with
+`Debtor ID, Debtor Name, Report Date, Expires On, Already Sent` and a blank `CreditSafe ID` column to fill in. Read-only.
+```powershell
+& $PY -m fvdebtor_creditcheck debtors --expired-within-days 90 --purchased-within-days 180
+```
+
 ## Delivery semantics (read this)
 * **At least once, not exactly once.** "Accepted" means Zapier returned 2xx (handed to Zapier), not that a
   credit refresh happened. An HTTP timeout can occur *after* Zapier accepted the event; the event is then
