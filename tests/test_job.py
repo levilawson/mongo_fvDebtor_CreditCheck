@@ -100,7 +100,7 @@ def test_payload_shape_and_string_preservation():
     p = collect_candidates([doc(i=1888)]).candidates[0].build_payload("t")
     assert p["debtor_id"] == "1888" and isinstance(p["credit_score"], str)
     assert p["event_id"] == make_event_id("1888", "2026-09-16")
-    assert set(p) == {"schema_version", "event_type", "event_id", "detected_at", "debtor_id", "debtor_name", "debtor_address",
+    assert set(p) == {"schema_version", "event_type", "event_id", "detected_at", "debtor_id", "debtor_name", "debtor_address", "debtor_contact",
                       "credit_score", "credit_report_date", "credit_average_days", "credit_report_expired", "is_active", "credit_report_expires_on",
                       "restricted", "mongo_updated_at", "client_count", "clients", "rep_groups"}
 
@@ -832,3 +832,16 @@ def test_run_looks_up_debtor_company_record_for_address(store):
     assert seen["ids"] == {"1380", "2565"}
     p = sess.calls[0][1]["json"]
     assert p["debtor_address"]["city"] == "Midland" and p["client_count"] == 1  # debtor row is not counted as a client
+
+
+def test_debtor_contact_from_company_record_with_fallback_to_debtor_doc():
+    companies = {"1380": {"name": "D", "accountRep": None, "address": {}, "phone": " 806-555-0100 ", "email": None}}
+    d = doc("1380")
+    d["doc"]["email"] = "ap@example.com"
+    d["doc"]["phone"] = "000-000-0000"
+    cand = collect_candidates([d]).candidates[0]
+    assert cand.build_payload("t", companies)["debtor_contact"] == {"phone": "806-555-0100", "email": "ap@example.com"}
+    assert cand.build_payload("t", {})["debtor_contact"] == {"phone": "000-000-0000", "email": "ap@example.com"}
+    assert collect_candidates([doc("1380")]).candidates[0].build_payload("t", {})["debtor_contact"] == \
+        {"phone": None, "email": None}
+    assert mongo_source.PROJECTION["doc.phone"] == 1 and mongo_source.COMPANY_PROJECTION["doc.email"] == 1

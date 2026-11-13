@@ -18,12 +18,14 @@ PROJECTION = {
     "doc.creditReportExpired": 1,
     "doc.restricted": 1,
     "doc.address.formatted": 1,
+    "doc.phone": 1,
+    "doc.email": 1,
     "updatedAt": 1,
     "clientId": 1,
 }
 COMPANY_PROJECTION = {"_id": 0, "doc.id": 1, "doc.name": 1, "doc.accountRep": 1, "doc.address.formatted": 1,
                       "doc.address.streetAddress": 1, "doc.address.locality": 1, "doc.address.region": 1,
-                      "doc.address.postalCode": 1}
+                      "doc.address.postalCode": 1, "doc.phone": 1, "doc.email": 1}
 
 
 class MongoReadError(Exception):
@@ -49,7 +51,8 @@ def fetch_companies(uri: str, ids, client_factory=MongoClient) -> dict[str, dict
             for d in coll.find({"doc.id": {"$in": ids[i:i + 500]}}, COMPANY_PROJECTION):
                 x = d.get("doc") or {}
                 out[str(x.get("id"))] = {"name": x.get("name"), "accountRep": x.get("accountRep"),
-                                         "address": x.get("address") or {}}
+                                         "address": x.get("address") or {}, "phone": x.get("phone"),
+                                         "email": x.get("email")}
         return out
     except Exception as exc:  # noqa: BLE001
         raise MongoReadError(type(exc).__name__) from None

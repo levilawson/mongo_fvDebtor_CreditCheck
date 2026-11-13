@@ -155,6 +155,16 @@ class Candidate:
                 "street": text(addr.get("streetAddress")), "city": text(addr.get("locality")),
                 "state": text(addr.get("region")), "postal_code": text(addr.get("postalCode"))}
 
+    def _debtor_contact(self, companies: dict | None) -> dict:
+        """Phone and email from the debtor's fvCompany record, falling back to the fvDebtor record."""
+        co = (companies or {}).get(self.debtor_id) or {}
+        fallback = self.doc.get("doc") or {}
+
+        def text(v):
+            return v.strip() if isinstance(v, str) and v.strip() else None
+        return {"phone": text(co.get("phone")) or text(fallback.get("phone")),
+                "email": text(co.get("email")) or text(fallback.get("email"))}
+
     def build_payload(self, detected_at: str, companies: dict | None = None, window_days: int = 180,
                       validity_days: int = 30) -> dict:
         companies = companies or {}
@@ -177,6 +187,7 @@ class Candidate:
             "debtor_id": self.debtor_id,
             "debtor_name": name if isinstance(name, str) else None,
             "debtor_address": self._debtor_address(companies),
+            "debtor_contact": self._debtor_contact(companies),
             "credit_score": score if isinstance(score, str) else (None if score is None else str(score)),
             "credit_report_date": self.report_date,
             "credit_report_expires_on": (date.fromisoformat(self.report_date) + timedelta(days=validity_days)).isoformat(),

@@ -118,6 +118,11 @@ Each event has `debtor_address` (`formatted`, `street`, `city`, `state`, `postal
 record, with `formatted` falling back to the address on the `fvDebtor` record. Missing parts are `null`. Events sent before
 this field existed get it when refreshed (`replay --refresh`).
 
+## Debtor contact
+Each event also has `debtor_contact` (`phone`, `email`) from the debtor's `fvCompany` record, falling back to the `fvDebtor`
+record; missing values are `null`. These are personal/business contact details: they are sent to Zapier, kept in the local
+database's stored payloads, and printed by `--show-payload`, but never written to logs.
+
 ## Delivery semantics (read this)
 * **At least once, not exactly once.** "Accepted" means Zapier returned 2xx (handed to Zapier), not that a
   credit refresh happened. An HTTP timeout can occur *after* Zapier accepted the event; the event is then
