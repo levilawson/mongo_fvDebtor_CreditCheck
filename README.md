@@ -133,6 +133,19 @@ is stored so the Resend button can replay it by `event_id`, and is never reconci
 & $PY -m fvdebtor_creditcheck send-test --debtor-id 2379 --send
 ```
 
+## Daily schedule (weekdays, Central)
+`deploy\\windows_task.ps1` registers two tasks, disabled until you enable them: **FV Credit Check Daily** at 8:00 AM
+(`run --send --expired-within-days 7 --purchased-within-days 180`: debtors whose report expired in the last 7 days and that
+had a purchase in the last 180 days) and **FV Credit Reconcile Daily** at 9:00 AM (`reconcile`). Debtors already sent are
+never resent, so the 7-day window just gives a few days of slack for a missed run. The older backlog is handled
+separately. Task Scheduler uses the PC's clock; check `tzutil /g` says Central Standard Time. If the 8:00 run hits the
+replay endpoint mid-request, the job exits with code 4 (another run in progress) and sends nothing until the next day, so
+check `runs` if a day looks empty.
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\windows_task.ps1
+Enable-ScheduledTask -TaskName "FV Credit Check Daily"; Enable-ScheduledTask -TaskName "FV Credit Reconcile Daily"
+```
+
 ## Delivery semantics (read this)
 * **At least once, not exactly once.** "Accepted" means Zapier returned 2xx (handed to Zapier), not that a
   credit refresh happened. An HTTP timeout can occur *after* Zapier accepted the event; the event is then
