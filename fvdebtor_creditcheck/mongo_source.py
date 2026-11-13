@@ -138,6 +138,20 @@ def fetch_current_ratings(uri: str, debtor_ids, client_factory=MongoClient) -> d
             client.close()
 
 
+def fetch_debtor_docs(uri: str, debtor_id: str, client_factory=MongoClient) -> list[dict]:
+    """All fvDebtor documents for one debtor, whatever their expired flag (used for explicit test sends). Read-only."""
+    ids = [debtor_id] + ([int(debtor_id)] if debtor_id.isdigit() else [])
+    client = None
+    try:
+        client = _open(uri, client_factory)
+        return list(client[MONGO_DB][MONGO_COLLECTION].find({"doc.id": {"$in": ids}}, PROJECTION))
+    except Exception as exc:  # noqa: BLE001
+        raise MongoReadError(type(exc).__name__) from None
+    finally:
+        if client is not None:
+            client.close()
+
+
 def fetch_expired(uri: str, client_factory=MongoClient) -> list[dict]:
     client = None
     try:

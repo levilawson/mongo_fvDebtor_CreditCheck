@@ -123,6 +123,16 @@ Each event also has `debtor_contact` (`phone`, `email`) from the debtor's `fvCom
 record; missing values are `null`. These are personal/business contact details: they are sent to Zapier, kept in the local
 database's stored payloads, and printed by `--show-payload`, but never written to logs.
 
+## Test events for one debtor (`send-test`)
+`send-test --debtor-id <id>` builds an event for any one debtor from current Mongo data, even if it is not expired (so a real
+`run` would never pick it), and sends it with `--send` (dry-run by default; `--show-payload` prints it). The event has its own
+key and `event_id` (it can never collide with the real event for the same debtor and report date), carries `is_test: true`,
+is stored so the Resend button can replay it by `event_id`, and is never reconciled. It uses the normal active/inactive routing.
+```powershell
+& $PY -m fvdebtor_creditcheck send-test --debtor-id 2379 --show-payload
+& $PY -m fvdebtor_creditcheck send-test --debtor-id 2379 --send
+```
+
 ## Delivery semantics (read this)
 * **At least once, not exactly once.** "Accepted" means Zapier returned 2xx (handed to Zapier), not that a
   credit refresh happened. An HTTP timeout can occur *after* Zapier accepted the event; the event is then

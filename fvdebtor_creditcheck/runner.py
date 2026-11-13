@@ -12,7 +12,7 @@ from . import webhook
 from datetime import date, datetime, timedelta, timezone
 
 from .events import (InvalidRecord, _updated_sort_key, collect_candidates, is_excluded_client,
-                     parse_report_date, utc_iso)
+                     make_event_id_for_key, parse_report_date, utc_iso)
 from .store import Store
 
 log = logging.getLogger(__name__)
@@ -269,6 +269,45 @@ def cohort_debtors(docs, store: Store, active_lookup=None, expired_within_days: 
         if cand.debtor_id not in best or entry["report_date"] > best[cand.debtor_id]["report_date"]:
             best[cand.debtor_id] = entry
     return sorted(best.values(), key=lambda r: (len(r["debtor_id"]), r["debtor_id"]))
+
+
+TEST_SUFFIX = "|test"
+
+
+def send_test_event(store: Store, client, docs, debtor_id: str, send: bool, active_lookup=None, company_lookup=None,
+                    debtor_clients_lookup=None, exclude_regex=None, window_days: int = 180,
+                    validity_days: int = 30):
+    """Build (and with send=True deliver) an event for one debtor regardless of its expired flag.
+
+    The event has its own key/event_id (never colliding with a real event) and `is_test: true`, is stored so it
+    can be replayed from the Resend button, and is skipped by reconcile. Returns (payload, Summary | None).
+    Raises LookupError if the debtor has no usable credit report date.
+    """
+    mine = [c for c in collect_candidates(docs).candidates if c.debtor_id == debtor_id]
+    if not mine:
+        raise LookupError(debtor_id)
+    cand = max(mine, key=lambda c: c.report_date)
+    cand.is_active = True if active_lookup is None else cand.debtor_id in active_lookup()
+    if debtor_clients_lookup:
+        cand.client_ids |= debtor_clients_lookup({debtor_id}).get(debtor_id, set())
+    companies = company_lookup(set(cand.client_ids) | {debtor_id}) if company_lookup else {}
+    cand.client_ids -= {c for c in cand.client_ids
+                        if is_excluded_client((companies.get(c) or {}).get("name"), exclude_regex)}
+    key = cand.store_key() + TEST_SUFFIX
+    existing = store.get(key)
+    detected = json.loads(existing["payload_json"])["detected_at"] if existing else utc_iso()
+    payload = cand.build_payload(detected, companies, window_days, validity_days)
+    payload["event_id"] = make_event_id_for_key(key)
+    payload["is_test"] = True
+    if not send:
+        return payload, None
+    if existing:
+        store.overwrite_payload(key, payload)
+    else:
+        store.ensure(key, payload)
+    summary = Summary(dry_run=False)
+    _deliver(store, client, store.get(key), summary)
+    return payload, summary
 
 
 def replay_event(store: Store, client, event_id: str, payload: dict | None = None) -> Summary:

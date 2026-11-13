@@ -99,10 +99,12 @@ def make_event_key(debtor_id: str, report_date: str) -> str:
     return f"{debtor_id}|{report_date}"
 
 
+def make_event_id_for_key(key: str) -> str:
+    return f"fvcr-{hashlib.sha256(key.encode()).hexdigest()[:32]}"
+
+
 def make_event_id(debtor_id: str, report_date: str, active: bool = True) -> str:
-    key = make_event_key(debtor_id, report_date) + ("" if active else INACTIVE_SUFFIX)
-    digest = hashlib.sha256(key.encode()).hexdigest()
-    return f"fvcr-{digest[:32]}"
+    return make_event_id_for_key(make_event_key(debtor_id, report_date) + ("" if active else INACTIVE_SUFFIX))
 
 
 def _updated_sort_key(value: Any) -> tuple[int, float]:

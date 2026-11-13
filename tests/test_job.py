@@ -845,3 +845,64 @@ def test_debtor_contact_from_company_record_with_fallback_to_debtor_doc():
     assert collect_candidates([doc("1380")]).candidates[0].build_payload("t", {})["debtor_contact"] == \
         {"phone": None, "email": None}
     assert mongo_source.PROJECTION["doc.phone"] == 1 and mongo_source.COMPANY_PROJECTION["doc.email"] == 1
+
+
+# ---- send-test ----
+def test_send_test_event_uses_separate_key_marks_test_and_is_replayable(store):
+    sess = FakeSession(Resp(200))
+    docs = [doc("2379", "2026-11-11", client="2565")]
+    docs[0]["doc"]["creditReportExpired"] = False  # not expired: a normal run would never select it
+    payload, summary = runner.send_test_event(store, client(sess), docs, "2379", True,
+                                              company_lookup=lambda ids: COMPANIES)
+    assert summary.accepted == 1 and payload["is_test"] is True
+    assert payload["event_id"] != make_event_id("2379", "2026-11-11")
+    assert store.get("2379|2026-11-11|test")["status"] == "accepted" and store.get("2379|2026-11-11") is None
+    # replayable by event_id (Resend button), keeping the same id
+    runner.replay_event(store, client(sess), payload["event_id"])
+    assert sess.calls[1][1]["json"]["event_id"] == payload["event_id"] and sess.calls[1][1]["json"]["is_test"] is True
+    # a later REAL event for the same debtor and report date is unaffected
+    s = runner.run_job([doc("2379", "2026-11-11")], store, client(sess), True, None)
+    assert s.accepted == 1 and s.already_sent == 0
+
+
+def test_send_test_event_dry_run_writes_nothing_and_unknown_debtor_raises(store):
+    docs = [doc("2379", "2026-11-11")]
+    payload, summary = runner.send_test_event(store, None, docs, "2379", False)
+    assert summary is None and payload["is_test"] and store.counts() == {}
+    with pytest.raises(LookupError):
+        runner.send_test_event(store, None, docs, "9999", False)
+    with pytest.raises(LookupError):
+        runner.send_test_event(store, None, [doc("2379", None)], "2379", False)
+
+
+def test_test_events_are_never_reconciled(store):
+    runner.send_test_event(store, client(FakeSession(Resp(200))), [doc("2379", "2026-09-01")], "2379", True)
+    assert store.unresolved_accepted() == []
+    assert runner.reconcile(store, lambda ids: {}).checked == 0
+
+
+def test_send_test_routes_inactive_debtor_to_inactive_hook(store):
+    a, b = FakeSession(Resp(200)), FakeSession(Resp(200))
+    routed = webhook.RoutedWebhook(client(a), webhook.WebhookClient("https://other.example/y", 1, 2, 1, 1, 1, session=b))
+    runner.send_test_event(store, routed, [doc("2379")], "2379", True, active_lookup=lambda: {"x"})
+    assert not a.calls and b.calls[0][1]["json"]["is_active"] is False
+
+
+def test_cli_send_test_dry_run_then_send(tmp_path, monkeypatch, capsys):
+    from fvdebtor_creditcheck import cli
+    _env(monkeypatch, tmp_path)
+    d = doc("2379", "2026-11-11", client="2565")
+    d["doc"]["creditReportExpired"] = False
+    monkeypatch.setattr(cli, "fetch_debtor_docs", lambda uri, did: [d])
+    monkeypatch.setattr(cli, "fetch_companies", lambda uri, ids: COMPANIES)
+    monkeypatch.setattr(cli, "fetch_debtor_clients", lambda uri, ids: {})
+    monkeypatch.setattr(cli, "fetch_active_debtors", lambda uri, since: {"2379"})
+    sess = FakeSession(Resp(200))
+    monkeypatch.setattr(cli, "build_client", lambda cfg: client(sess))
+    assert cli.main(["send-test", "--debtor-id", "2379", "--show-payload"]) == 0
+    out = capsys.readouterr().out
+    assert "[dry-run]" in out and '"is_test": true' in out and not sess.calls
+    assert cli.main(["send-test", "--debtor-id", "2379", "--send"]) == 0
+    assert "accepted=1" in capsys.readouterr().out and len(sess.calls) == 1
+    monkeypatch.setattr(cli, "fetch_debtor_docs", lambda uri, did: [])
+    assert cli.main(["send-test", "--debtor-id", "9999"]) == 2

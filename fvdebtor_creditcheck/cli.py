@@ -15,9 +15,9 @@ from pathlib import Path
 from .config import Config, ConfigError, load_config
 from .events import utc_iso
 from .mongo_source import (MongoReadError, SuspiciousActivityData, fetch_active_debtors, fetch_companies,
-                           fetch_current_ratings, fetch_debtor_clients, fetch_expired)
+                           fetch_current_ratings, fetch_debtor_clients, fetch_debtor_docs, fetch_expired)
 from .runner import (AlreadyRunning, cohort_debtors, reconcile, rebuild_event_payload, replay_event,
-                     run_job, single_instance)
+                     run_job, send_test_event, single_instance)
 from .store import Store
 from .webhook import RoutedWebhook, WebhookClient
 
@@ -75,6 +75,10 @@ def parser() -> argparse.ArgumentParser:
     dl.add_argument("--expired-within-days", type=int, metavar="N")
     dl.add_argument("--purchased-within-days", type=int, metavar="N")
     dl.add_argument("--out", help="CSV path (default: state/debtors_<UTC date>.csv)")
+    st = sub.add_parser("send-test", help="send a clearly marked TEST event for one debtor, even if it is not expired")
+    st.add_argument("--debtor-id", required=True)
+    st.add_argument("--send", action="store_true", help="actually POST (default: dry-run)")
+    st.add_argument("--show-payload", action="store_true")
     sv = sub.add_parser("serve", help="run the authenticated replay endpoint (put it behind your Cloudflare tunnel)")
     sv.add_argument("--host", default="127.0.0.1", help="loopback only")
     sv.add_argument("--port", type=int, help="default REPLAY_API_PORT (8787)")
@@ -281,6 +285,44 @@ def cmd_debtors(cfg: Config, args) -> int:
     return 0
 
 
+def cmd_send_test(cfg: Config, args) -> int:
+    docs = fetch_debtor_docs(cfg.require_mongo(), args.debtor_id)
+    window = cfg.activity_window_days
+    since = (datetime.now(timezone.utc).date() - timedelta(days=window)).isoformat()
+    kwargs = dict(active_lookup=lambda: fetch_active_debtors(cfg.require_mongo(), since),
+                  company_lookup=lambda ids: fetch_companies(cfg.require_mongo(), ids),
+                  debtor_clients_lookup=lambda ids: fetch_debtor_clients(cfg.require_mongo(), ids),
+                  exclude_regex=_exclude_re(cfg), window_days=window, validity_days=cfg.report_validity_days)
+    try:
+        if not args.send:
+            store = Store(cfg.state_db_path, readonly=True)
+            try:
+                payload, _ = send_test_event(store, None, docs, args.debtor_id, False, **kwargs)
+            finally:
+                store.close()
+            print(f"[dry-run] would send TEST event_id={payload['event_id']} debtor={args.debtor_id} "
+                  f"report_date={payload['credit_report_date']} clients={payload['client_count']} "
+                  f"route={'main' if payload['is_active'] else 'inactive'}; add --send to transmit")
+            if args.show_payload:
+                print(json.dumps(payload, indent=2))
+            return 0
+        cfg.require_webhook()
+        cfg.require_inactive_webhook()
+        with single_instance(cfg.lock_path):
+            store = Store(cfg.state_db_path)
+            store.start_run("send-test", {"debtor_id": args.debtor_id})
+            try:
+                payload, summary = send_test_event(store, build_client(cfg), docs, args.debtor_id, True, **kwargs)
+                store.finish_run(_summary_dict(summary), summary.aborted)
+            finally:
+                store.close()
+    except LookupError:
+        print(f"no usable credit report found in Mongo for debtor {args.debtor_id!r}", file=sys.stderr)
+        return 2
+    print(f"TEST event_id={payload['event_id']}: " + summary.line())
+    return 1 if summary.failed else 0
+
+
 def cmd_serve(cfg: Config, args) -> int:
     from .server import create_server
     try:
@@ -377,7 +419,8 @@ def main(argv=None) -> int:
         setup_logging(cfg)
         return {"run": cmd_run, "status": cmd_status, "replay": cmd_replay,
                 "reconcile": cmd_reconcile, "history": cmd_history, "runs": cmd_runs,
-                "export": cmd_export, "backup": cmd_backup, "serve": cmd_serve, "debtors": cmd_debtors}[args.cmd](cfg, args)
+                "export": cmd_export, "backup": cmd_backup, "serve": cmd_serve, "debtors": cmd_debtors,
+                "send-test": cmd_send_test}[args.cmd](cfg, args)
     except ConfigError as exc:
         print(f"configuration error: {exc}", file=sys.stderr)
         return 2

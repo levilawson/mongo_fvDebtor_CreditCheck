@@ -192,7 +192,12 @@ class Store:
         cond = " AND resolved_at IS NULL" if "resolved_at" in have else ""  # old DB: nothing resolved yet
         rows = self.conn.execute(
             f"SELECT * FROM events WHERE status='accepted'{cond} ORDER BY accepted_at").fetchall()
-        return [r for r in rows if json.loads(r["payload_json"]).get("is_active") is not False]
+        out = []
+        for r in rows:
+            p = json.loads(r["payload_json"])
+            if p.get("is_active") is not False and p.get("is_test") is not True:  # test sends are never reconciled
+                out.append(r)
+        return out
 
     def overwrite_payload(self, event_key: str, payload: dict):
         """Replace a stored payload (also for accepted events), e.g. for an explicit refreshed replay."""
