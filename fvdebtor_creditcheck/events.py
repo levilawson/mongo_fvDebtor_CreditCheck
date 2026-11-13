@@ -144,6 +144,17 @@ class Candidate:
         """Active events keep the plain key; inactive-route events are tracked separately."""
         return self.event_key + ("" if self.is_active else INACTIVE_SUFFIX)
 
+    def _debtor_address(self, companies: dict | None) -> dict:
+        """Structured address from the debtor's fvCompany record; formatted address falls back to fvDebtor."""
+        addr = ((companies or {}).get(self.debtor_id) or {}).get("address") or {}
+        fallback = ((self.doc.get("doc") or {}).get("address") or {})
+
+        def text(v):
+            return v.strip() if isinstance(v, str) and v.strip() else None
+        return {"formatted": text(addr.get("formatted")) or text(fallback.get("formatted")),
+                "street": text(addr.get("streetAddress")), "city": text(addr.get("locality")),
+                "state": text(addr.get("region")), "postal_code": text(addr.get("postalCode"))}
+
     def build_payload(self, detected_at: str, companies: dict | None = None, window_days: int = 180,
                       validity_days: int = 30) -> dict:
         companies = companies or {}
@@ -165,6 +176,7 @@ class Candidate:
             "detected_at": detected_at,
             "debtor_id": self.debtor_id,
             "debtor_name": name if isinstance(name, str) else None,
+            "debtor_address": self._debtor_address(companies),
             "credit_score": score if isinstance(score, str) else (None if score is None else str(score)),
             "credit_report_date": self.report_date,
             "credit_report_expires_on": (date.fromisoformat(self.report_date) + timedelta(days=validity_days)).isoformat(),

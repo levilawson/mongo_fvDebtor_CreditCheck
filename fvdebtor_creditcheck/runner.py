@@ -136,7 +136,8 @@ def run_job(docs, store: Store, client, send: bool, limit: int | None,
             cand.client_ids |= linked.get(cand.debtor_id, set())
 
     all_ids = {c for cand, _ in selected for c in cand.client_ids}
-    companies = company_lookup(all_ids) if company_lookup and all_ids else {}
+    lookup_ids = all_ids | {cand.debtor_id for cand, _ in selected}  # clients, plus debtors for their address
+    companies = company_lookup(lookup_ids) if company_lookup and lookup_ids else {}
     excluded = {c for c in all_ids if is_excluded_client((companies.get(c) or {}).get("name"), exclude_regex)}
     for cand, _ in selected:
         cand.client_ids -= excluded
@@ -233,7 +234,7 @@ def rebuild_event_payload(row, docs, company_lookup=None, debtor_clients_lookup=
     cand.is_active = stored.get("is_active") is not False
     if debtor_clients_lookup:
         cand.client_ids |= debtor_clients_lookup({cand.debtor_id}).get(cand.debtor_id, set())
-    companies = company_lookup(set(cand.client_ids)) if company_lookup and cand.client_ids else {}
+    companies = company_lookup(set(cand.client_ids) | {cand.debtor_id}) if company_lookup else {}
     cand.client_ids -= {c for c in cand.client_ids
                         if is_excluded_client((companies.get(c) or {}).get("name"), exclude_regex)}
     payload = cand.build_payload(stored["detected_at"], companies, window_days, validity_days)

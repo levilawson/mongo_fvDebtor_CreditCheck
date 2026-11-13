@@ -100,7 +100,7 @@ def test_payload_shape_and_string_preservation():
     p = collect_candidates([doc(i=1888)]).candidates[0].build_payload("t")
     assert p["debtor_id"] == "1888" and isinstance(p["credit_score"], str)
     assert p["event_id"] == make_event_id("1888", "2026-09-16")
-    assert set(p) == {"schema_version", "event_type", "event_id", "detected_at", "debtor_id", "debtor_name",
+    assert set(p) == {"schema_version", "event_type", "event_id", "detected_at", "debtor_id", "debtor_name", "debtor_address",
                       "credit_score", "credit_report_date", "credit_average_days", "credit_report_expired", "is_active", "credit_report_expires_on",
                       "restricted", "mongo_updated_at", "client_count", "clients", "rep_groups"}
 
@@ -801,3 +801,34 @@ def test_cli_debtors_writes_csv_and_prints_list(tmp_path, monkeypatch, capsys):
     assert rows[0] == ["Debtor ID", "Debtor Name", "Report Date", "Expires On", "Already Sent", "CreditSafe ID"]
     assert rows[1][:2] == ["1034", "Debtor 1034"] and rows[1][4:] == ["no", ""]
     assert cli.main(["debtors", "--expired-within-days", "0"]) == 2
+
+
+def test_debtor_address_from_company_record_with_fallback_to_debtor_doc():
+    companies = {"1380": {"name": "Select Water", "accountRep": None,
+                          "address": {"formatted": "1820 N Main, Midland, TX, 79701", "streetAddress": "1820 N Main",
+                                      "locality": "Midland", "region": "TX", "postalCode": "79701"}}}
+    cand = collect_candidates([doc("1380")]).candidates[0]
+    assert cand.build_payload("t", companies)["debtor_address"] == {
+        "formatted": "1820 N Main, Midland, TX, 79701", "street": "1820 N Main", "city": "Midland",
+        "state": "TX", "postal_code": "79701"}
+    d = doc("1380")
+    d["doc"]["address"] = {"formatted": "PO Box 5, Odessa, TX"}
+    fb = collect_candidates([d]).candidates[0].build_payload("t", {})["debtor_address"]
+    assert fb == {"formatted": "PO Box 5, Odessa, TX", "street": None, "city": None, "state": None, "postal_code": None}
+    none = collect_candidates([doc("1380")]).candidates[0].build_payload("t", {})["debtor_address"]
+    assert set(none.values()) == {None}
+
+
+def test_run_looks_up_debtor_company_record_for_address(store):
+    seen = {}
+
+    def lookup(ids):
+        seen["ids"] = set(ids)
+        return {"1380": {"name": "D", "accountRep": None, "address": {"locality": "Midland", "region": "TX"}},
+                **COMPANIES}
+
+    sess = FakeSession(Resp(200))
+    runner.run_job([doc("1380", client="2565")], store, client(sess), True, None, company_lookup=lookup)
+    assert seen["ids"] == {"1380", "2565"}
+    p = sess.calls[0][1]["json"]
+    assert p["debtor_address"]["city"] == "Midland" and p["client_count"] == 1  # debtor row is not counted as a client

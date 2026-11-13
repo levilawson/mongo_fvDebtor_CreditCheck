@@ -113,6 +113,11 @@ Because the Zap has no `event_id` check, the Zap itself must still stop a second
 & $PY -m fvdebtor_creditcheck debtors --expired-within-days 90 --purchased-within-days 180
 ```
 
+## Debtor location
+Each event has `debtor_address` (`formatted`, `street`, `city`, `state`, `postal_code`), taken from the debtor's `fvCompany`
+record, with `formatted` falling back to the address on the `fvDebtor` record. Missing parts are `null`. Events sent before
+this field existed get it when refreshed (`replay --refresh`).
+
 ## Delivery semantics (read this)
 * **At least once, not exactly once.** "Accepted" means Zapier returned 2xx (handed to Zapier), not that a
   credit refresh happened. An HTTP timeout can occur *after* Zapier accepted the event; the event is then
