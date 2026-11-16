@@ -104,6 +104,14 @@ down it stops stale `serve` processes, frees the port (python processes only), s
 public URL fails it only logs a warning: the tunnel belongs to the OI watchdog and this project never starts or stops
 cloudflared. The watchdog is the only thing that should start `serve` (the older FvDebtorReplayApi task is disabled).
 `serve` is threaded, so `/health` still answers during a slow replay.
+### Sending a debtor that has no `event_id` yet (the backlog)
+`POST /send` with body `{"debtor_id": "1380"}` (same headers/token as `/replay`) builds and sends that debtor's expired-report
+event, the same as `run --debtor-id 1380 --send`, and returns `{"status": "accepted", "event_id": "fvcr-...", "created": true}`.
+Store that `event_id` on the row so later reruns can use `/replay`. Responses: 200 `accepted`, 502 `failed` (the event is stored,
+so a retry re-sends it), 400 bad `debtor_id`, 404 no unsent expired report in Mongo for that debtor, 409 busy.
+If the debtor already has an accepted event, `/send` replays it instead (200, no `created`; 429 inside the cooldown), so a
+double press never creates a second event. Test events (`send-test`) are ignored. Restart `serve` after updating (the watchdog does this
+within 5 minutes only if it is down, so restart it manually).
 Because the Zap has no `event_id` check, the Zap itself must still stop a second press (for example a "Needs Rerun" flag).
 
 ## List debtors to prepare (before go-live)

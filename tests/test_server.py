@@ -159,3 +159,36 @@ def test_health_answers_while_a_replay_is_in_progress(tmp_path):
         release.set()
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_send_creates_first_event_for_debtor_without_event_id(tmp_path):
+    cfg = make_cfg(tmp_path)
+    sess = FakeSession(Resp(200))
+    status, body = server.process_send(cfg, make_deps(sess), "1380")
+    assert status == 200 and body == {"status": "accepted", "event_id": EID, "created": True}
+    assert sess.calls[0][1]["json"]["event_id"] == EID and sess.calls[0][1]["json"]["client_count"] == 2
+    st = Store(cfg.state_db_path)
+    assert st.runs()[0]["command"] == "send (api)"
+    st.close()
+
+
+def test_send_for_already_sent_debtor_replays_instead_of_duplicating(tmp_path):
+    cfg = make_cfg(tmp_path)
+    seed(cfg)
+    sess = FakeSession(Resp(200))
+    status, body = server.process_send(cfg, make_deps(sess), "1380")
+    assert status == 200 and body["event_id"] == EID and "created" not in body
+    assert len(sess.calls) == 1
+    assert server.process_send(cfg, make_deps(sess), "1380")[0] == 429  # replay cooldown still applies
+
+
+def test_send_rejects_bad_unknown_failed_and_busy(tmp_path):
+    cfg = make_cfg(tmp_path)
+    sess = FakeSession(Resp(200))
+    assert server.process_send(cfg, make_deps(sess), None)[0] == 400
+    assert server.process_send(cfg, make_deps(sess), "1; drop")[0] == 400
+    assert server.process_send(cfg, make_deps(sess), "999")[0] == 404 and not sess.calls
+    status, body = server.process_send(cfg, make_deps(FakeSession(Resp(400))), "1380")
+    assert status == 502 and body["event_id"] == EID
+    with runner.single_instance(cfg.lock_path):
+        assert server.process_send(cfg, make_deps(sess), "1380")[0] == 409
