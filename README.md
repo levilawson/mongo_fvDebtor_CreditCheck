@@ -110,7 +110,9 @@ event, the same as `run --debtor-id 1380 --send`, and returns `{"status": "accep
 Store that `event_id` on the row so later reruns can use `/replay`. Responses: 200 `accepted`, 502 `failed` (the event is stored,
 so a retry re-sends it), 400 bad `debtor_id`, 404 no unsent expired report in Mongo for that debtor, 409 busy.
 If the debtor already has an accepted event, `/send` replays it instead (200, no `created`; 429 inside the cooldown), so a
-double press never creates a second event. Test events (`send-test`) are ignored. Restart `serve` after updating (the watchdog does this
+double press never creates a second event. Test events (`send-test`) are ignored.
+You can also keep the Zap pointed at `/replay`: if the body has a blank/missing `event_id` and a `debtor_id`, it is handled exactly like `/send`,
+so one Zap step can send body `{"event_id": "<event_id or blank>", "debtor_id": "<debtor id>"}` for every row. Restart `serve` after updating (the watchdog does this
 within 5 minutes only if it is down, so restart it manually).
 Because the Zap has no `event_id` check, the Zap itself must still stop a second press (for example a "Needs Rerun" flag).
 

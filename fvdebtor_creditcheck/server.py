@@ -190,7 +190,8 @@ def make_handler(cfg: Config, deps: Deps, token: str):
                     raise ValueError
             except ValueError:
                 return self._send(400, {"status": "error", "error": "body must be a JSON object"})
-            if self.path == "/send":
+            # /replay with no event_id but a debtor_id behaves like /send, so one Zap step serves both kinds of row.
+            if self.path == "/send" or (not data.get("event_id") and data.get("debtor_id")):
                 status, body = process_send(cfg, deps, data.get("debtor_id"))
                 log.info("send request debtor_id=%s -> %s", data.get("debtor_id") if status != 400 else "?", status)
                 return self._send(status, body)

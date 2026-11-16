@@ -192,3 +192,18 @@ def test_send_rejects_bad_unknown_failed_and_busy(tmp_path):
     assert status == 502 and body["event_id"] == EID
     with runner.single_instance(cfg.lock_path):
         assert server.process_send(cfg, make_deps(sess), "1380")[0] == 409
+
+
+def test_replay_path_with_blank_event_id_and_debtor_id_sends_new_event(tmp_path):
+    cfg = make_cfg(tmp_path)
+    sess = FakeSession(Resp(200))
+    httpd = server.create_server(cfg, port=0, deps=make_deps(sess))
+    port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        status, body = _call(port, body={"event_id": "", "debtor_id": "1380"})
+        assert status == 200 and body["event_id"] == EID and body["created"] is True
+        assert _call(port, body={"event_id": ""})[0] == 400  # no debtor_id either: still a bad request
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
