@@ -130,7 +130,8 @@ def test_http_endpoint_auth_routing_and_replay(tmp_path):
         httpd.server_close()
 
 
-def test_health_answers_while_a_replay_is_in_progress(tmp_path):
+def test_health_answers_while_a_replay_is_in_progress(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "LOCK_WAIT_SECONDS", 0.5)
     cfg = make_cfg(tmp_path)
     seed(cfg)
     started, release = threading.Event(), threading.Event()
@@ -207,3 +208,21 @@ def test_replay_path_with_blank_event_id_and_debtor_id_sends_new_event(tmp_path)
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_send_queues_behind_a_running_job_instead_of_409(tmp_path):
+    import time
+    cfg = make_cfg(tmp_path)
+    sess = FakeSession(Resp(200))
+
+    def hold():
+        with runner.single_instance(cfg.lock_path):
+            time.sleep(1)
+
+    th = threading.Thread(target=hold)
+    th.start()
+    time.sleep(0.3)
+    assert server.process_send(cfg, make_deps(sess), "1380", lock_wait=10)[0] == 200
+    th.join()
+    with runner.single_instance(cfg.lock_path):
+        assert server.process_send(cfg, make_deps(sess), "1380", lock_wait=0.5)[0] == 409  # gives up after the wait

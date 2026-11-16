@@ -104,6 +104,10 @@ down it stops stale `serve` processes, frees the port (python processes only), s
 public URL fails it only logs a warning: the tunnel belongs to the OI watchdog and this project never starts or stops
 cloudflared. The watchdog is the only thing that should start `serve` (the older FvDebtorReplayApi task is disabled).
 `serve` is threaded, so `/health` still answers during a slow replay.
+Requests that arrive while another send/replay is running **queue** for the job lock (up to 20 seconds, `LOCK_WAIT_SECONDS`)
+instead of failing, so working through the backlog by pressing the button on many rows works. If the queue is longer than that
+(or the 8:00 AM scheduled run is mid-send) a request still gets 409; set the Zap step to retry on 409.
+
 ### Sending a debtor that has no `event_id` yet (the backlog)
 `POST /send` with body `{"debtor_id": "1380"}` (same headers/token as `/replay`) builds and sends that debtor's expired-report
 event, the same as `run --debtor-id 1380 --send`, and returns `{"status": "accepted", "event_id": "fvcr-...", "created": true}`.

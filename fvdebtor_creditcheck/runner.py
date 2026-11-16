@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -22,21 +23,31 @@ class AlreadyRunning(Exception):
     pass
 
 
+def _try_lock(fh) -> bool:
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
 @contextmanager
-def single_instance(lock_path: Path):
+def single_instance(lock_path: Path, wait_seconds: float = 0):
+    """Hold the job lock. With wait_seconds > 0, queue for it (polling) before giving up with AlreadyRunning."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fh = open(lock_path, "ab")  # never write to it: on Windows a buffered write into a locked byte fails on close
     try:
-        try:
-            if sys.platform == "win32":
-                import msvcrt
-                fh.seek(0)
-                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            raise AlreadyRunning("another run holds the lock") from None
+        deadline = time.monotonic() + wait_seconds
+        while not _try_lock(fh):
+            if time.monotonic() >= deadline:
+                raise AlreadyRunning("another run holds the lock")
+            time.sleep(0.25)
         yield
     finally:
         fh.close()  # releases the flock

@@ -34,6 +34,7 @@ log = logging.getLogger(__name__)
 EVENT_ID_RE = re.compile(r"^fvcr-[0-9a-f]{32}$")
 DEBTOR_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 MAX_BODY = 4096
+LOCK_WAIT_SECONDS = 20  # queue behind a running job this long (Zapier's webhook step times out near 30s)
 LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -60,13 +61,14 @@ def default_deps(cfg: Config) -> Deps:
                 lambda since: mongo_source.fetch_active_debtors(uri(), since))
 
 
-def process_replay(cfg: Config, deps: Deps, event_id, refresh: bool = True, now: datetime | None = None):
+def process_replay(cfg: Config, deps: Deps, event_id, refresh: bool = True, now: datetime | None = None,
+                   lock_wait: float = 0):
     """Returns (http_status, body). Never raises for expected conditions."""
     if not isinstance(event_id, str) or not EVENT_ID_RE.match(event_id):
         return 400, {"status": "error", "error": "event_id missing or malformed"}
     now = now or datetime.now(timezone.utc)
     try:
-        with single_instance(cfg.lock_path):
+        with single_instance(cfg.lock_path, lock_wait):
             store = Store(cfg.state_db_path)
             try:
                 row = store.get_by_event_id(event_id)
@@ -101,7 +103,7 @@ def process_replay(cfg: Config, deps: Deps, event_id, refresh: bool = True, now:
                  "error": summary.aborted or "delivery to Zapier failed"}
 
 
-def process_send(cfg: Config, deps: Deps, debtor_id, now: datetime | None = None):
+def process_send(cfg: Config, deps: Deps, debtor_id, now: datetime | None = None, lock_wait: float = 0):
     """Send the first event for a debtor that has no event_id yet. Returns (http_status, body).
 
     A debtor that already has a real (non-test) stored event is replayed instead, so a double press or a debtor
@@ -111,7 +113,7 @@ def process_send(cfg: Config, deps: Deps, debtor_id, now: datetime | None = None
         return 400, {"status": "error", "error": "debtor_id missing or malformed"}
     now = now or datetime.now(timezone.utc)
     try:
-        with single_instance(cfg.lock_path):
+        with single_instance(cfg.lock_path, lock_wait):
             store = Store(cfg.state_db_path)
             try:
                 existing = next((r for r in store.debtor_history(debtor_id)["events"]
@@ -136,7 +138,7 @@ def process_send(cfg: Config, deps: Deps, debtor_id, now: datetime | None = None
     except AlreadyRunning:
         return 409, {"status": "busy", "error": "another run is in progress; try again shortly"}
     if existing is not None:
-        return process_replay(cfg, deps, existing["event_id"], now=now)
+        return process_replay(cfg, deps, existing["event_id"], now=now, lock_wait=lock_wait)
     if not summary.selected:
         return 404, {"status": "error", "error": "no unsent expired credit report found for this debtor_id"}
     if summary.accepted:
@@ -192,11 +194,11 @@ def make_handler(cfg: Config, deps: Deps, token: str):
                 return self._send(400, {"status": "error", "error": "body must be a JSON object"})
             # /replay with no event_id but a debtor_id behaves like /send, so one Zap step serves both kinds of row.
             if self.path == "/send" or (not data.get("event_id") and data.get("debtor_id")):
-                status, body = process_send(cfg, deps, data.get("debtor_id"))
+                status, body = process_send(cfg, deps, data.get("debtor_id"), lock_wait=LOCK_WAIT_SECONDS)
                 log.info("send request debtor_id=%s -> %s", data.get("debtor_id") if status != 400 else "?", status)
                 return self._send(status, body)
             refresh = data.get("refresh", True) is not False
-            status, body = process_replay(cfg, deps, data.get("event_id"), refresh)
+            status, body = process_replay(cfg, deps, data.get("event_id"), refresh, lock_wait=LOCK_WAIT_SECONDS)
             log.info("replay request event_id=%s -> %s", data.get("event_id") if status != 400 else "?", status)
             self._send(status, body)
 
