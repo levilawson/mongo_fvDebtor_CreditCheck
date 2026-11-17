@@ -13,13 +13,15 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 
 from . import mongo_source
 from .config import Config
-from .runner import AlreadyRunning, rebuild_event_payload, replay_event, single_instance
+from .events import InvalidRecord, parse_debtor_id
+from .runner import (AlreadyRunning, rebuild_event_payload, replay_event, send_first_time_event,
+                     single_instance)
 from .store import Store
 from .webhook import RoutedWebhook, WebhookClient
 
@@ -36,6 +38,8 @@ class Deps:
     fetch_companies: Callable
     fetch_debtor_clients: Callable
     build_client: Callable
+    fetch_debtor_docs: Callable | None = None   # first-time sends (debtor_id without an event_id)
+    fetch_active: Callable | None = None        # () -> set of active debtor ids
 
 
 def default_deps(cfg: Config) -> Deps:
@@ -48,7 +52,10 @@ def default_deps(cfg: Config) -> Deps:
     return Deps(lambda: mongo_source.fetch_expired(uri()),
                 lambda ids: mongo_source.fetch_companies(uri(), ids),
                 lambda ids: mongo_source.fetch_debtor_clients(uri(), ids),
-                build_client)
+                build_client,
+                lambda debtor_id: mongo_source.fetch_debtor_docs(uri(), debtor_id),
+                lambda: mongo_source.fetch_active_debtors(
+                    uri(), (datetime.now(timezone.utc).date() - timedelta(days=cfg.activity_window_days)).isoformat()))
 
 
 def process_replay(cfg: Config, deps: Deps, event_id, refresh: bool = True, now: datetime | None = None):
@@ -89,6 +96,45 @@ def process_replay(cfg: Config, deps: Deps, event_id, refresh: bool = True, now:
     if summary.accepted:
         return 200, {"status": "accepted", "event_id": event_id, "payload": used}
     return 502, {"status": "failed", "event_id": event_id, "payload": used,
+                 "error": summary.aborted or "delivery to Zapier failed"}
+
+
+def process_first_time(cfg: Config, deps: Deps, debtor_id, now: datetime | None = None):
+    """Send a debtor's event for the first time (no stored event_id): e.g. a debtor never pulled before."""
+    try:
+        debtor_id = parse_debtor_id(debtor_id)
+    except InvalidRecord:
+        return 400, {"status": "error", "error": "event_id or debtor_id required"}
+    if deps.fetch_debtor_docs is None:
+        return 501, {"status": "error", "error": "first-time sends not configured"}
+    try:
+        with single_instance(cfg.lock_path):
+            store = Store(cfg.state_db_path)
+            try:
+                docs = deps.fetch_debtor_docs(debtor_id)
+                store.start_run("send first-time (api)", {"debtor_id": debtor_id})
+                try:
+                    payload, summary = send_first_time_event(
+                        store, deps.build_client(), docs, debtor_id, deps.fetch_active, deps.fetch_companies,
+                        deps.fetch_debtor_clients, cfg.exclude_pattern(), cfg.activity_window_days,
+                        cfg.report_validity_days, cfg.replay_cooldown_seconds, now)
+                except LookupError:
+                    store.finish_run({}, "debtor not found")
+                    return 404, {"status": "error", "error": "debtor_id not found in Mongo"}
+                if summary is None:
+                    return 429, {"status": "cooldown", "event_id": payload["event_id"],
+                                 "retry_after_seconds": payload["cooldown_seconds_left"]}
+                store.finish_run({"accepted": summary.accepted, "failed": summary.failed}, summary.aborted)
+            finally:
+                store.close()
+    except AlreadyRunning:
+        return 409, {"status": "busy", "error": "another run is in progress; try again shortly"}
+    except mongo_source.MongoReadError:
+        return 502, {"status": "failed", "error": "mongo read failed"}
+    if summary.accepted:
+        return 200, {"status": "accepted", "event_id": payload["event_id"], "debtor_id": debtor_id,
+                     "payload": "first_time", "never_pulled": bool(payload.get("never_pulled"))}
+    return 502, {"status": "failed", "event_id": payload["event_id"],
                  "error": summary.aborted or "delivery to Zapier failed"}
 
 
@@ -138,7 +184,12 @@ def make_handler(cfg: Config, deps: Deps, token: str):
             except ValueError:
                 return self._send(400, {"status": "error", "error": "body must be a JSON object"})
             refresh = data.get("refresh", True) is not False
-            status, body = process_replay(cfg, deps, data.get("event_id"), refresh)
+            event_id = data.get("event_id")
+            if event_id in (None, "") and data.get("debtor_id") not in (None, ""):
+                status, body = process_first_time(cfg, deps, str(data["debtor_id"]))
+                log.info("first-time request debtor_id=%s -> %s", data["debtor_id"], status)
+                return self._send(status, body)
+            status, body = process_replay(cfg, deps, event_id, refresh)
             log.info("replay request event_id=%s -> %s", data.get("event_id") if status != 400 else "?", status)
             self._send(status, body)
 

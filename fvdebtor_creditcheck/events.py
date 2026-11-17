@@ -12,6 +12,7 @@ SCHEMA_VERSION = 1
 EVENT_TYPE = "factorview.credit_report_expired"
 EVENT_TYPE_INACTIVE = "factorview.credit_report_expired_inactive"
 INACTIVE_SUFFIX = "|inactive"
+NEVER = "never"  # report_date sentinel: debtor has never had a credit report pulled
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -181,6 +182,7 @@ class Candidate:
         score = cr.get("score")
         avg = cr.get("averageDays")
         name = d.get("name")
+        never = self.report_date == NEVER
         payload = {
             "schema_version": SCHEMA_VERSION,
             "event_type": EVENT_TYPE if self.is_active else EVENT_TYPE_INACTIVE,
@@ -191,8 +193,9 @@ class Candidate:
             "debtor_address": self._debtor_address(companies),
             "debtor_contact": self._debtor_contact(companies),
             "credit_score": score if isinstance(score, str) else (None if score is None else str(score)),
-            "credit_report_date": self.report_date,
-            "credit_report_expires_on": (date.fromisoformat(self.report_date) + timedelta(days=validity_days)).isoformat(),
+            "credit_report_date": None if never else self.report_date,
+            "credit_report_expires_on": None if never else (
+                date.fromisoformat(self.report_date) + timedelta(days=validity_days)).isoformat(),
             "credit_average_days": avg if isinstance(avg, int) and not isinstance(avg, bool) else None,
             "credit_report_expired": True,
             "is_active": self.is_active,
@@ -202,6 +205,9 @@ class Candidate:
             "clients": clients,
             "rep_groups": build_rep_groups(clients),
         }
+        if never:
+            payload["never_pulled"] = True
+            payload["credit_report_expired"] = False
         if not self.is_active:
             payload["inactive_reason"] = f"no invoices purchased in {window_days} days or more"
             payload["inactivity_window_days"] = window_days

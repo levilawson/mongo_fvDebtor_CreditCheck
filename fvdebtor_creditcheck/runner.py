@@ -11,7 +11,7 @@ from pathlib import Path
 from . import webhook
 from datetime import date, datetime, timedelta, timezone
 
-from .events import (InvalidRecord, _updated_sort_key, collect_candidates, is_excluded_client,
+from .events import (Candidate, NEVER, make_event_key, InvalidRecord, parse_client_id, _updated_sort_key, collect_candidates, is_excluded_client,
                      make_event_id_for_key, parse_report_date, utc_iso)
 from .store import Store
 
@@ -204,7 +204,7 @@ def reconcile(store: Store, ratings_lookup, stale_days: int = 3, now: datetime |
     for row in rows:
         summary.checked += 1
         best = _newest_rating(ratings.get(row["debtor_id"], []))
-        if best and best[2] > row["report_date"]:
+        if best and (row["report_date"] == NEVER or best[2] > row["report_date"]):
             score = best[1] if best[1] is None or isinstance(best[1], str) else str(best[1])
             store.mark_resolved(row["event_key"], score, best[2])
             summary.resolved += 1
@@ -322,3 +322,57 @@ def replay_event(store: Store, client, event_id: str, payload: dict | None = Non
     if res.outcome == webhook.CONFIG_ERROR:
         summary.aborted = f"destination configuration error (HTTP {res.http_status})"
     return summary
+
+
+def build_first_time_candidate(docs, debtor_id: str):
+    """Candidate for a debtor regardless of its expired flag; never-pulled debtors get report_date NEVER.
+
+    Raises LookupError if Mongo has no document for the debtor.
+    """
+    mine = [d for d in docs if str((d.get("doc") or {}).get("id")) == debtor_id]
+    if not mine:
+        raise LookupError(debtor_id)
+    dated = [c for c in collect_candidates(mine).candidates if c.debtor_id == debtor_id]
+    if dated:
+        cand = max(dated, key=lambda c: c.report_date)
+    else:
+        newest = max(mine, key=lambda d: _updated_sort_key(d.get("updatedAt")))
+        cand = Candidate(make_event_key(debtor_id, NEVER), debtor_id, NEVER, newest, _updated_sort_key(newest.get("updatedAt")))
+        for d in mine:
+            cid = parse_client_id(d.get("clientId"))
+            if cid:
+                cand.client_ids.add(cid)
+    return cand
+
+
+def send_first_time_event(store: Store, client, docs, debtor_id: str, active_lookup=None, company_lookup=None,
+                          debtor_clients_lookup=None, exclude_regex=None, window_days: int = 180,
+                          validity_days: int = 30, cooldown_seconds: int = 0, now: datetime | None = None):
+    """Send a real (non-test) event for a debtor with no expired report, e.g. one never pulled before.
+
+    Re-sending the same debtor reuses its event_id/detected_at. Returns (payload, Summary | None);
+    Summary is None when skipped for cooldown (payload then has `cooldown_seconds_left`).
+    """
+    cand = build_first_time_candidate(docs, debtor_id)
+    cand.is_active = True if active_lookup is None else cand.debtor_id in active_lookup()
+    if debtor_clients_lookup:
+        cand.client_ids |= debtor_clients_lookup({debtor_id}).get(debtor_id, set())
+    companies = company_lookup(set(cand.client_ids) | {debtor_id}) if company_lookup else {}
+    cand.client_ids -= {c for c in cand.client_ids
+                        if is_excluded_client((companies.get(c) or {}).get("name"), exclude_regex)}
+    key = cand.store_key()
+    existing = store.get(key)
+    now = now or datetime.now(timezone.utc)
+    if existing and existing["last_attempt_at"] and cooldown_seconds:
+        age = (now - datetime.fromisoformat(existing["last_attempt_at"].replace("Z", "+00:00"))).total_seconds()
+        if age < cooldown_seconds:
+            return {"event_id": existing["event_id"], "cooldown_seconds_left": int(cooldown_seconds - age) + 1}, None
+    detected = json.loads(existing["payload_json"])["detected_at"] if existing else utc_iso()
+    payload = cand.build_payload(detected, companies, window_days, validity_days)
+    if existing:
+        store.overwrite_payload(key, payload)
+    else:
+        store.ensure(key, payload)
+    summary = Summary(dry_run=False)
+    _deliver(store, client, store.get(key), summary)
+    return payload, summary

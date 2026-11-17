@@ -5,7 +5,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from .events import utc_iso
+from .events import NEVER, utc_iso
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -94,13 +94,14 @@ class Store:
 
     def ensure(self, event_key: str, payload: dict):
         """Insert as pending if unseen. Existing rows (and their stored payload) are kept."""
+        report_date = payload["credit_report_date"] or NEVER  # never-pulled debtors have no report date
         cur = self.conn.execute(
             "INSERT OR IGNORE INTO events (event_key,event_id,debtor_id,report_date,payload_json,status,first_seen_at)"
             " VALUES (?,?,?,?,?,'pending',?)",
-            (event_key, payload["event_id"], payload["debtor_id"], payload["credit_report_date"],
+            (event_key, payload["event_id"], payload["debtor_id"], report_date,
              json.dumps(payload, sort_keys=True), utc_iso()))
         if cur.rowcount:
-            self._add_score(payload["debtor_id"], payload["credit_report_date"], payload.get("credit_score"),
+            self._add_score(payload["debtor_id"], report_date, payload.get("credit_score"),
                             "detected", payload["event_id"])
         self.conn.commit()
         return self.get(event_key)

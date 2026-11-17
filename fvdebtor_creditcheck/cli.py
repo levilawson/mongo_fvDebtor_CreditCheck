@@ -17,7 +17,7 @@ from .events import utc_iso
 from .mongo_source import (MongoReadError, SuspiciousActivityData, fetch_active_debtors, fetch_companies,
                            fetch_current_ratings, fetch_debtor_clients, fetch_debtor_docs, fetch_expired)
 from .runner import (AlreadyRunning, cohort_debtors, reconcile, rebuild_event_payload, replay_event,
-                     run_job, send_test_event, single_instance)
+                     run_job, send_first_time_event, send_test_event, single_instance)
 from .store import Store
 from .webhook import RoutedWebhook, WebhookClient
 
@@ -79,6 +79,10 @@ def parser() -> argparse.ArgumentParser:
     st.add_argument("--debtor-id", required=True)
     st.add_argument("--send", action="store_true", help="actually POST (default: dry-run)")
     st.add_argument("--show-payload", action="store_true")
+    sf = sub.add_parser("send-first", help="send a real event for one debtor with no expired report (e.g. never pulled)")
+    sf.add_argument("--debtor-id", required=True)
+    sf.add_argument("--send", action="store_true", help="actually POST (default: dry-run)")
+    sf.add_argument("--show-payload", action="store_true")
     sv = sub.add_parser("serve", help="run the authenticated replay endpoint (put it behind your Cloudflare tunnel)")
     sv.add_argument("--host", default="127.0.0.1", help="loopback only")
     sv.add_argument("--port", type=int, help="default REPLAY_API_PORT (8787)")
@@ -323,6 +327,40 @@ def cmd_send_test(cfg: Config, args) -> int:
     return 1 if summary.failed else 0
 
 
+def cmd_send_first(cfg: Config, args) -> int:
+    docs = fetch_debtor_docs(cfg.require_mongo(), args.debtor_id)
+    window = cfg.activity_window_days
+    since = (datetime.now(timezone.utc).date() - timedelta(days=window)).isoformat()
+    kwargs = dict(active_lookup=lambda: fetch_active_debtors(cfg.require_mongo(), since),
+                  company_lookup=lambda ids: fetch_companies(cfg.require_mongo(), ids),
+                  debtor_clients_lookup=lambda ids: fetch_debtor_clients(cfg.require_mongo(), ids),
+                  exclude_regex=_exclude_re(cfg), window_days=window, validity_days=cfg.report_validity_days)
+    try:
+        if not args.send:
+            from .runner import build_first_time_candidate
+            cand = build_first_time_candidate(docs, args.debtor_id)
+            print(f"[dry-run] would send first-time event for debtor={args.debtor_id} "
+                  f"report_date={cand.report_date}; add --send to transmit")
+            return 0
+        cfg.require_webhook()
+        cfg.require_inactive_webhook()
+        with single_instance(cfg.lock_path):
+            store = Store(cfg.state_db_path)
+            store.start_run("send-first", {"debtor_id": args.debtor_id})
+            try:
+                payload, summary = send_first_time_event(store, build_client(cfg), docs, args.debtor_id, **kwargs)
+                store.finish_run(_summary_dict(summary), summary.aborted)
+            finally:
+                store.close()
+    except LookupError:
+        print(f"debtor {args.debtor_id!r} not found in Mongo", file=sys.stderr)
+        return 2
+    if args.show_payload:
+        print(json.dumps(payload, indent=2))
+    print(f"event_id={payload['event_id']}: " + summary.line())
+    return 1 if summary.failed else 0
+
+
 def cmd_serve(cfg: Config, args) -> int:
     from .server import create_server
     try:
@@ -420,7 +458,7 @@ def main(argv=None) -> int:
         return {"run": cmd_run, "status": cmd_status, "replay": cmd_replay,
                 "reconcile": cmd_reconcile, "history": cmd_history, "runs": cmd_runs,
                 "export": cmd_export, "backup": cmd_backup, "serve": cmd_serve, "debtors": cmd_debtors,
-                "send-test": cmd_send_test}[args.cmd](cfg, args)
+                "send-test": cmd_send_test, "send-first": cmd_send_first}[args.cmd](cfg, args)
     except ConfigError as exc:
         print(f"configuration error: {exc}", file=sys.stderr)
         return 2
